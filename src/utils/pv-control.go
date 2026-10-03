@@ -18,12 +18,13 @@ type ControlResult struct {
 	ThrottledRemainingSec     float64
 	IsStatusOverride          bool
 
-	// NEW: Dynamic Telemetry Fields for Advanced System Visibility
-	TimerStatus       string  // "Boost: X/300s", "Recovery: X/300s", or "Idle"
-	NextStepUpWatts   float64 // Power threshold needed to step up
-	NextStepDownWatts float64 // Power threshold that forces a step down
+	// Telemetry Fields for Advanced System Visibility
+	TimerStatus       string
+	NextStepUpWatts   float64
+	NextStepDownWatts float64
 }
 
+// CalculatePVControl executes the complete hysteresis logic and returns the data to main.
 func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarState *int, boostStartTime *time.Time, recoveryStartTime *time.Time) ControlResult {
 	var result ControlResult
 
@@ -33,6 +34,7 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 	carState := status.Data.Car
 	status.Mu.RUnlock()
 
+	// Soft fallbacks for uninitialized background network states
 	if currentAmp == 0 {
 		currentAmp = variables.MinAmperage
 	}
@@ -50,8 +52,11 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 		result.ActivePhases = 1
 	}
 
+	// Calculate mathematical target power footprint based on settings (Amps * Phases * 230V)
 	result.CalculatedWbPower = float64(result.CurrentAmperage) * float64(result.ActivePhases) * variables.NominalVoltage
 	result.GridSurplus = variables.AvailableSurplusW
+
+	// Total available solar power combines the grid snapshot and what the wallbox is currently holding
 	result.PotentialSolarTotal = result.GridSurplus + result.CalculatedWbPower
 	result.PredictedLeftoverSurplusW = result.GridSurplus
 
@@ -61,15 +66,15 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 		*lastCarState = carState
 	}
 
-	// Calculate dynamic next step thresholds
+	// Calculate dynamic next step thresholds for human auditing
 	wattPerAmpStep := variables.NominalVoltage * float64(result.ActivePhases)
 	hysteresisBuffer := float64(variables.SolarHysteresisBandW)
 
 	result.NextStepUpWatts = (float64(currentAmp+1) * wattPerAmpStep) + hysteresisBuffer
 	result.NextStepDownWatts = (float64(currentAmp) * wattPerAmpStep) - hysteresisBuffer
-
 	result.TimerStatus = "Idle"
 
+	// Mode 1: Force Max Mode is globally active via Web UI
 	if variables.ChargeMode == "max" {
 		result.TargetAmperage = variables.MaxAmperage
 		if currentAmp != variables.MaxAmperage {
@@ -79,6 +84,7 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 		return result
 	}
 
+	// Hard connection boundaries and pre-conditioning recovery checks
 	if variables.SetWallboxOnlyIfCarConnected {
 		if carState == 1 {
 			result.TargetAmperage = variables.MinAmperage
@@ -87,14 +93,8 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 				result.IsStatusOverride = true
 			}
 			return result
-		} else if carState == 4 {
-			result.TargetAmperage = variables.MaxAmperage
-			if currentAmp != variables.MaxAmperage {
-				result.ShouldWriteToWallbox = true
-				result.IsStatusOverride = true
-			}
-			return result
-		} else if carState == 3 {
+		} else if carState == 4 || carState == 3 {
+			// Automatically force 11 kW if charge finished (for morning heating) or waiting
 			result.TargetAmperage = variables.MaxAmperage
 			if currentAmp != variables.MaxAmperage {
 				result.ShouldWriteToWallbox = true
@@ -105,32 +105,34 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 	}
 
 	// ------------------------------------------------------------------------
-	// Efficiency Boost Engine Timers Audit
+	// Efficiency Boost Engine (Sustained Grid Import / Export Management)
 	// ------------------------------------------------------------------------
 	requiredDelay := time.Duration(variables.GridThresholdDelaySec) * time.Second
 	convertedThreshold := float64(variables.GridThresholdW)
 
 	if carState == 2 {
-		if currentAmp == variables.MinAmperage && result.PotentialSolarTotal < -convertedThreshold {
+		// CONDITION A: High Total Grid Import -> Trigger 11 kW Boost after sustained delay
+		// If the entire house (including wallbox) draws more than 1500W from the grid, the timer starts.
+		if result.GridSurplus < -convertedThreshold {
 			*recoveryStartTime = time.Time{}
+
 			if boostStartTime.IsZero() {
 				*boostStartTime = time.Now()
 			}
-
-			elapsed := int(time.Since(*boostStartTime).Seconds())
-			result.TimerStatus = string(rune(elapsed)) // Captured below dynamically safely
 
 			if time.Since(*boostStartTime) >= requiredDelay {
 				result.TargetAmperage = variables.MaxAmperage
 				result.PredictedLeftoverSurplusW = result.GridSurplus - (float64(variables.MaxAmperage-variables.MinAmperage) * variables.NominalVoltage * float64(result.ActivePhases))
 				if currentAmp != variables.MaxAmperage {
 					result.ShouldWriteToWallbox = true
-					result.IsStatusOverride = true
+					result.IsStatusOverride = true // Bypass standard timers for immediate acceleration
 				}
 				return result
 			}
 		} else if currentAmp == variables.MaxAmperage && result.PotentialSolarTotal >= (float64(variables.MinAmperage)*float64(result.ActivePhases)*variables.NominalVoltage)+hysteresisBuffer {
+			// CONDITION B: Genuine Solar Return -> Fall back down after sustained delay
 			*boostStartTime = time.Time{}
+
 			if recoveryStartTime.IsZero() {
 				*recoveryStartTime = time.Now()
 			}
@@ -146,7 +148,7 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 				return result
 			}
 		} else {
-			if result.PotentialSolarTotal >= 0 {
+			if result.GridSurplus >= 0 {
 				*boostStartTime = time.Time{}
 			}
 			if result.PotentialSolarTotal < -convertedThreshold {
@@ -154,13 +156,19 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 			}
 		}
 
-		if currentAmp == variables.MaxAmperage && result.PotentialSolarTotal < 0 {
+		// CRITICAL LOCK: Hold 16 A firmly until real solar potential returns to positive
+		if currentAmp == variables.MaxAmperage && result.PotentialSolarTotal < (float64(variables.MinAmperage)*float64(result.ActivePhases)*variables.NominalVoltage) {
 			result.TargetAmperage = variables.MaxAmperage
 			return result
 		}
+	} else {
+		*boostStartTime = time.Time{}
+		*recoveryStartTime = time.Time{}
 	}
 
-	// Handle standard solar loops tracking updates
+	// ------------------------------------------------------------------------
+	// Universal Solar Hysteresis Logic (Symmetrical Deadband)
+	// ------------------------------------------------------------------------
 	targetAmpsStepUp := int((result.PotentialSolarTotal - hysteresisBuffer) / wattPerAmpStep)
 	targetAmpsStepDown := int((result.PotentialSolarTotal + hysteresisBuffer) / wattPerAmpStep)
 
@@ -173,6 +181,7 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 		}
 		powerToSpend := float64(newAmp-currentAmp) * wattPerAmpStep
 		result.PredictedLeftoverSurplusW = result.GridSurplus - powerToSpend
+
 	} else if targetAmpsStepDown < currentAmp {
 		newAmp = targetAmpsStepDown
 		if newAmp < variables.MinAmperage {
