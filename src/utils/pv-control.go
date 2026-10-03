@@ -19,7 +19,7 @@ type ControlResult struct {
 	IsStatusOverride          bool
 }
 
-// CalculatePVControl executes the complete hysteresis logic and returns the data to main.
+// CalculatePVControl executes the complete charging logic and returns the data to main.
 func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarState *int, boostStartTime *time.Time, recoveryStartTime *time.Time) ControlResult {
 	var result ControlResult
 
@@ -61,7 +61,7 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 		*lastCarState = carState
 	}
 
-	// If Force Max Mode is active, bypass solar tracking entirely
+	// Mode 1: Force Max Mode is globally active via Web UI
 	if variables.ChargeMode == "max" {
 		result.TargetAmperage = variables.MaxAmperage
 		if currentAmp != variables.MaxAmperage {
@@ -71,16 +71,29 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 		return result
 	}
 
-	// Only enforce hard state freezes if configured to lock when unplugged
+	// ------------------------------------------------------------------------
+	// NEW & OPTIMIZED: Hard vehicle connection and pre-conditioning boundaries
+	// ------------------------------------------------------------------------
 	if variables.SetWallboxOnlyIfCarConnected {
-		if carState == 1 {
+		if carState == 1 { // Vehicle unplugged
+			// Vehicle unplugged: Revert back to safe minimum current
 			result.TargetAmperage = variables.MinAmperage
 			if currentAmp != variables.MinAmperage {
 				result.ShouldWriteToWallbox = true
 				result.IsStatusOverride = true
 			}
 			return result
-		} else if carState == 3 || carState == 4 {
+		} else if carState == 4 { // Charge finished
+			// FIX: Charge finished! Automatically open up the full 16 A (11 kW) buffer
+			// so the morning pre-conditioning/heating draws 100% from the grid, not the battery.
+			result.TargetAmperage = variables.MaxAmperage
+			if currentAmp != variables.MaxAmperage {
+				result.ShouldWriteToWallbox = true
+				result.IsStatusOverride = true // Bypass all write timers for immediate safety dispatch
+			}
+			return result
+		} else if carState == 3 { // Connected but waiting
+			// Connected but waiting (e.g. paused by vehicle timer) -> Hold maximum capability
 			result.TargetAmperage = variables.MaxAmperage
 			if currentAmp != variables.MaxAmperage {
 				result.ShouldWriteToWallbox = true

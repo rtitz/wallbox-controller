@@ -65,7 +65,7 @@ var (
 type WbStatus struct {
 	Fna string    `json:"fna"` // Friendly Name
 	Amp int       `json:"amp"` // Target Amperage Limit
-	Car int       `json:"car"` // Car Connectivity State
+	Car int       `json:"car"` // Car Connectivity State (1 = unplugged, 2 = charging, 3 = connected but waiting, 4 = charge finished)
 	Frc int       `json:"frc"` // Force Charging State Override
 	Psm int       `json:"psm"` // Phase Switch Mode
 	Fsp bool      `json:"fsp"` // Force Single Phase Status

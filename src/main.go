@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"strings"
 	"time"
 	"wallbox-controller/utils"
 	"wallbox-controller/variables"
@@ -61,6 +62,7 @@ func main() {
 	var boostStartTime time.Time    // Tracker for high grid draw delay (Step up)
 	var recoveryStartTime time.Time // Tracker for clear solar return delay (Step down)
 
+	// Console output loop for real-time monitoring of PV control decisions
 	go func() {
 		for {
 			// Trigger calculation and retrieve data structure
@@ -69,13 +71,64 @@ func main() {
 			variables.TargetAmperage = result.TargetAmperage
 			variables.PredictedLeftoverSurplusW = result.PredictedLeftoverSurplusW
 
+			// Fetch human-readable car, psm, and fsp states from the thread-safe structure
+			carDesc := "Unknown"
+			psmDesc := "Unknown"
+			fspDesc := "3-Phase"
+			var sessionKwh float64 = 0.0
+
+			status.Mu.RLock()
+			currentCarState := status.Data.Car
+			currentPsm := status.Data.Psm
+			currentFsp := status.Data.Fsp
+			sessionKwh = status.Data.Wh / 1000.0 // Convert Wh to kWh
+			status.Mu.RUnlock()
+
+			// Map Car State
+			switch currentCarState {
+			case 1:
+				carDesc = "Unplugged"
+			case 2:
+				carDesc = "Charging"
+			case 3:
+				carDesc = "Waiting"
+			case 4:
+				carDesc = "Finished"
+			}
+
+			// Map Phase Switch Mode (psm)
+			switch currentPsm {
+			case 1:
+				psmDesc = "Forced-1Ph"
+			case 2:
+				psmDesc = "Forced-3Ph"
+			default:
+				psmDesc = "Automatic"
+			}
+
+			// Map Active Relay State (fsp)
+			if currentFsp {
+				fspDesc = "1-Phase"
+			}
+
 			// Generate the current timestamp for logging purposes
 			timestamp := time.Now().Format("2006-01-02 15:04:05")
 
-			// Log the current PV control status in a single line for easy reading
-			fmt.Printf("[%s] [PV-Control] Ph:%d | Curr:%d A (%.0fW) | GridSurplus:%.0fW | PotentialSolarTotal:%.0fW | Target:%d A\n",
-				timestamp, result.ActivePhases, result.CurrentAmperage, result.CalculatedWbPower,
-				result.GridSurplus, result.PotentialSolarTotal, result.TargetAmperage)
+			// UPDATED: Appended | Session:%.2f kWh | Psm:%s | Relay:%s to the terminal log line
+			fmt.Printf("[%s] [PV-Control] Ph:%d | Curr:%d A (%.0fW) | GridSurplus:%.0fW | PotentialSolarTotal:%.0fW | Target:%d A | Car:%s | Mode:%s | Session:%.2f kWh | Psm:%s | Relay:%s\n",
+				timestamp,
+				result.ActivePhases,
+				result.CurrentAmperage,
+				result.CalculatedWbPower,
+				result.GridSurplus,
+				result.PotentialSolarTotal,
+				result.TargetAmperage,
+				carDesc,
+				strings.ToUpper(variables.ChargeMode),
+				sessionKwh,
+				psmDesc,
+				fspDesc,
+			)
 
 			// Execute API action if permitted by throttling and connection variables
 			if result.ShouldWriteToWallbox {
