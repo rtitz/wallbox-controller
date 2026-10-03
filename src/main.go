@@ -81,10 +81,9 @@ func main() {
 			currentCarState := status.Data.Car
 			currentPsm := status.Data.Psm
 			currentFsp := status.Data.Fsp
-			sessionKwh = status.Data.Wh / 1000.0 // Convert Wh to kWh
+			sessionKwh = status.Data.Wh / 1000.0
 			status.Mu.RUnlock()
 
-			// Map Car State
 			switch currentCarState {
 			case 1:
 				carDesc = "Unplugged"
@@ -96,7 +95,6 @@ func main() {
 				carDesc = "Finished"
 			}
 
-			// Map Phase Switch Mode (psm)
 			switch currentPsm {
 			case 1:
 				psmDesc = "Forced-1Ph"
@@ -106,37 +104,40 @@ func main() {
 				psmDesc = "Automatic"
 			}
 
-			// Map Active Relay State (fsp)
 			if currentFsp {
 				fspDesc = "1-Phase"
 			}
 
-			// Generate the current timestamp for logging purposes
+			// Parse active timer state contexts cleanly
+			timerLogStr := "Idle"
+			if !boostStartTime.IsZero() {
+				timerLogStr = fmt.Sprintf("Boost:%ds/%ds", int(time.Since(boostStartTime).Seconds()), variables.GridThresholdDelaySec)
+			} else if !recoveryStartTime.IsZero() {
+				timerLogStr = fmt.Sprintf("Recover:%ds/%ds", int(time.Since(recoveryStartTime).Seconds()), variables.GridThresholdDelaySec)
+			}
+
+			// Calculate distance deltas to step up or step down
+			deltaUpStr := "MaxReached"
+			if result.CurrentAmperage < variables.MaxAmperage {
+				deltaUpStr = fmt.Sprintf("%.0fW (Need:%.0fW)", result.NextStepUpWatts-result.PotentialSolarTotal, result.NextStepUpWatts)
+			}
+
+			deltaDownStr := "MinReached"
+			if result.CurrentAmperage > variables.MinAmperage {
+				deltaDownStr = fmt.Sprintf("%.0fW (Need:%.0fW)", result.PotentialSolarTotal-result.NextStepDownWatts, result.NextStepDownWatts)
+			}
+
 			timestamp := time.Now().Format("2006-01-02 15:04:05")
 
-			// UPDATED: Appended | Session:%.2f kWh | Psm:%s | Relay:%s to the terminal log line
-			fmt.Printf("[%s] [PV-Control] Ph:%d | Curr:%d A (%.0fW) | GridSurplus:%.0fW | PotentialSolarTotal:%.0fW | Target:%d A | Car:%s | Mode:%s | Session:%.2f kWh | Psm:%s | Relay:%s\n",
-				timestamp,
-				result.ActivePhases,
-				result.CurrentAmperage,
-				result.CalculatedWbPower,
-				result.GridSurplus,
-				result.PotentialSolarTotal,
-				result.TargetAmperage,
-				carDesc,
-				strings.ToUpper(variables.ChargeMode),
-				sessionKwh,
-				psmDesc,
-				fspDesc,
+			// RENDER EXTENDED LOG: Appended dynamic step boundaries and active ticking timers
+			fmt.Printf("[%s] [PV-Control] Curr:%d A (%.0fW) | GridSurplus:%.0fW | PotentialSolarTotal:%.0fW | Target:%d A | Car:%s | Mode:%s | Session:%.2f kWh | Psm:%s | Relay:%s | UpIn:%s | DownIn:%s | Timers:%s\n",
+				timestamp, result.CurrentAmperage, result.CalculatedWbPower, result.GridSurplus, result.PotentialSolarTotal, result.TargetAmperage,
+				carDesc, strings.ToUpper(variables.ChargeMode), sessionKwh, psmDesc, fspDesc, deltaUpStr, deltaDownStr, timerLogStr,
 			)
 
-			// Execute API action if permitted by throttling and connection variables
 			if result.ShouldWriteToWallbox {
 				fmt.Printf("[%s] [API DISPATCH] Pushing new Amperage setting: %d A\n", timestamp, result.TargetAmperage)
-				newValues := map[string]interface{}{
-					"amp": result.TargetAmperage,
-				}
-
+				newValues := map[string]interface{}{"amp": result.TargetAmperage}
 				err := utils.WriteSettings(variables.WallboxIp, newValues)
 				if err != nil {
 					fmt.Printf("[%s] [ERROR] Dispatch failed: %v\n", timestamp, err)

@@ -81,20 +81,20 @@ const webserverCSS = `
 		box-shadow: inset 0 2px 8px rgba(0,0,0,0.2);
 	}
 	.metrics-divider {
-		color: #ffffff; /* NEW: Strictly white for the top metrics headline */
+		color: #ffffff;
 		font-weight: bold;
 		margin-top: 5px;
 		padding-top: 5px;
 	}
 	.section-divider {
-		color: #2ecc71; /* RESTORED: Kept at green for Live Grid Management */
+		color: #2ecc71;
 		font-weight: bold;
 		border-top: 1px solid #3d4e5d;
 		margin-top: 15px;
 		padding-top: 15px;
 	}
 	.curl-divider {
-		color: #3498db; /* UNTOUCHED: Kept at blue for Remote Control Commands */
+		color: #3498db;
 		font-weight: bold;
 		border-top: 1px solid #3d4e5d;
 		margin-top: 15px;
@@ -107,6 +107,12 @@ type SafeStatus struct {
 	Mu   sync.RWMutex
 	Data variables.WbStatus
 }
+
+// Global reference containers to bridge main loop timers over to the webserver thread
+var (
+	GlobalLastBoostTime    time.Time
+	GlobalLastRecoveryTime time.Time
+)
 
 func StartWebServer(port int, status *SafeStatus) {
 
@@ -128,14 +134,11 @@ func StartWebServer(port int, status *SafeStatus) {
 				}
 
 				_ = WriteSettings(variables.WallboxIp, newValues)
-
-				// Give the go-eCharger hardware 500ms to commit state updates before redirecting
 				time.Sleep(500 * time.Millisecond)
 			}
 		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
-
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
@@ -146,7 +149,12 @@ func StartWebServer(port int, status *SafeStatus) {
 		fmt.Fprint(w, webserverCSS)
 
 		status.Mu.RLock()
-		defer status.Mu.RUnlock()
+		currentAmp := status.Data.Amp
+		status.Mu.RUnlock()
+
+		if currentAmp == 0 {
+			currentAmp = variables.MinAmperage
+		}
 
 		maxKWCalculated := (float64(variables.MaxAmperage) * 3.0 * variables.NominalVoltage) / 1000.0
 
@@ -172,8 +180,6 @@ func StartWebServer(port int, status *SafeStatus) {
 		fmt.Fprintf(w, "</div>")
 
 		fmt.Fprintf(w, "<pre>")
-
-		// FIX: Assigned the newly created metrics-divider class here for clean white text output
 		fmt.Fprintf(w, "<div class='metrics-divider'>--- Wallbox Controller Metrics ---</div>")
 		fmt.Fprintf(w, "Operational Mode Enforced: %s\n", strings.ToUpper(variables.ChargeMode))
 		fmt.Fprintf(w, "Charger Name:              %s\n", status.Data.Fna)
@@ -245,11 +251,40 @@ func StartWebServer(port int, status *SafeStatus) {
 
 		if variables.ChargeMode == "max" {
 			fmt.Fprintf(w, "Current set Ampere value:  %.0f W / New target Ampere value: %.0f W (Bypassing Solar Control)\n", currentWattsCalculated, float64(variables.MaxAmperage*activePhases)*variables.NominalVoltage)
-			fmt.Fprintf(w, "Available Solar Surplus after Wallbox adjustment: N/A (Max Mode Forced)\n")
+			//fmt.Fprintf(w, "Available Solar Surplus after Wallbox adjustment: N/A (Max Mode Forced)\n")
 		} else {
 			fmt.Fprintf(w, "Current set Ampere value:  %.0f W / New target Ampere value: %.0f W\n", currentWattsCalculated, targetWattsCalculated)
-			fmt.Fprintf(w, "Available Solar Surplus after Wallbox adjustment:  %.0f W\n", variables.PredictedLeftoverSurplusW)
+			//fmt.Fprintf(w, "Available Solar Surplus after Wallbox adjustment:  %.0f W\n", variables.PredictedLeftoverSurplusW)
 		}
+
+		wattPerAmpStep := variables.NominalVoltage * float64(activePhases)
+		hysteresisBuffer := float64(variables.SolarHysteresisBandW)
+		potentialSolarTotal := variables.AvailableSurplusW + currentWattsCalculated
+
+		nextStepUpWatts := float64(currentAmp+1)*wattPerAmpStep + hysteresisBuffer
+		nextStepDownWatts := float64(currentAmp)*wattPerAmpStep - hysteresisBuffer
+
+		deltaUpStr := "Maximum Amperage Reached"
+		if currentAmp < variables.MaxAmperage {
+			deltaUpStr = fmt.Sprintf("%.0f W (Threshold Target: %.0f W)", nextStepUpWatts-potentialSolarTotal, nextStepUpWatts)
+		}
+
+		deltaDownStr := "Minimum Amperage Reached"
+		if currentAmp > variables.MinAmperage {
+			deltaDownStr = fmt.Sprintf("%.0f W (Threshold Target: %.0f W)", potentialSolarTotal-nextStepDownWatts, nextStepDownWatts)
+		}
+
+		timerLogStr := "Idle"
+		if !GlobalLastBoostTime.IsZero() {
+			timerLogStr = fmt.Sprintf("Boost Pending (%ds / %ds)", int(time.Since(GlobalLastBoostTime).Seconds()), variables.GridThresholdDelaySec)
+		} else if !GlobalLastRecoveryTime.IsZero() {
+			timerLogStr = fmt.Sprintf("Solar Recovery Pending (%ds / %ds)", int(time.Since(GlobalLastRecoveryTime).Seconds()), variables.GridThresholdDelaySec)
+		}
+
+		fmt.Fprintf(w, "True Household Solar Potential:  %.0f W\n", potentialSolarTotal)
+		fmt.Fprintf(w, "Required Power to Step Up (+1A): %s\n", deltaUpStr)
+		fmt.Fprintf(w, "Allowed Drop before Step Down:  %s\n", deltaDownStr)
+		fmt.Fprintf(w, "Efficiency Engine Timers State:  %s\n", timerLogStr)
 
 		currentHost := r.Host
 		if currentHost == "" {
