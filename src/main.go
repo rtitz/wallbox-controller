@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 	"wallbox-controller/utils"
@@ -24,7 +23,7 @@ func main() {
 
 	status := &utils.SafeStatus{}
 
-	// Goroutine 1: Refresh Wallbox Data from API
+	// Goroutine 1: Refresh Wallbox Data from API (The absolute truth during the night)
 	go func() {
 		for {
 			newStatus, err := getStatus(variables.WallboxIp)
@@ -36,33 +35,32 @@ func main() {
 				status.Data = newStatus
 				status.Mu.Unlock()
 			}
-			time.Sleep(1000 * time.Millisecond) // Static rapid API sync
+			time.Sleep(1000 * time.Millisecond)
 		}
 	}()
 
-	// Goroutine 2: Refresh Inverter and Grid Data directly from Prometheus
+	// Goroutine 2: Refresh Data directly from Prometheus (Authentic Grid tracking 24/7)
 	go func() {
 		for {
 			allMetrics, err := utils.FetchPrometheusMetrics(variables.PrometheusMetricsUrlInverter)
+
 			if err != nil {
 				timestamp := time.Now().Format("2006-01-02 15:04:05")
 				fmt.Printf("[%s] [ERROR] Failed to fetch Prometheus metrics: %v\n", timestamp, err)
 			} else {
+				production := allMetrics["inverter_ac_power_watts"]
 				gridPower := allMetrics["total_grid_power_watts"]
 
-				if production, ok := allMetrics["inverter_ac_power_watts"]; ok {
-					variables.LiveSolarProductionW = production
+				// FIX: LiveSolarProductionW reads 0W naturally at night when the inverter sleeps.
+				// We don't overwrite the dynamic grid meter readings with fallback dummies anymore!
+				if production == 0 || allMetrics["total_solar_power_watts"] == 0 {
+					variables.LiveSolarProductionW = 0.0
 				} else {
-					status.Mu.RLock()
-					var activePhases int = 3
-					if status.Data.Fsp {
-						activePhases = 1
-					}
-					currentWbPower := float64(status.Data.Amp) * float64(activePhases) * variables.NominalVoltage
-					status.Mu.RUnlock()
-					variables.LiveSolarProductionW = math.Max(0, (-gridPower)+currentWbPower)
+					variables.LiveSolarProductionW = production
 				}
 
+				// The house meter (total_grid_power_watts) stays active and fluid 24/7.
+				// Negative gridPower = Feeding into grid / Positive gridPower = Drawing from grid
 				variables.AvailableSurplusW = -gridPower
 			}
 			time.Sleep(time.Duration(variables.RefreshIntervalInMillisecondsPromInverter) * time.Millisecond)
@@ -81,14 +79,12 @@ func main() {
 			// Trigger calculation and retrieve data structure
 			result := utils.CalculatePVControl(status, &lastWriteTime, &lastCarState, &boostStartTime, &recoveryStartTime)
 
-			// FIX: Dynamic timer bridging for the frontend layout engine
 			utils.GlobalLastBoostTime = boostStartTime
 			utils.GlobalLastRecoveryTime = recoveryStartTime
 
 			variables.TargetAmperage = result.TargetAmperage
 			variables.PredictedLeftoverSurplusW = result.PredictedLeftoverSurplusW
 
-			// Fetch human-readable car, psm, and fsp states from the thread-safe structure
 			carDesc := "Unknown"
 			psmDesc := "Unknown"
 			fspDesc := "3-Phase"
@@ -125,7 +121,6 @@ func main() {
 				fspDesc = "1-Phase"
 			}
 
-			// Parse active timer state contexts cleanly
 			timerLogStr := "Idle"
 			if !boostStartTime.IsZero() {
 				timerLogStr = fmt.Sprintf("Boost:%ds/%ds", int(time.Since(boostStartTime).Seconds()), variables.GridThresholdDelaySec)
@@ -133,7 +128,6 @@ func main() {
 				timerLogStr = fmt.Sprintf("Recover:%ds/%ds", int(time.Since(recoveryStartTime).Seconds()), variables.GridThresholdDelaySec)
 			}
 
-			// Calculate distance deltas to step up or step down
 			deltaUpStr := "MaxReached"
 			if result.CurrentAmperage < variables.MaxAmperage {
 				deltaUpStr = fmt.Sprintf("%.0fW (Need:%.0fW)", result.NextStepUpWatts-result.PotentialSolarTotal, result.NextStepUpWatts)
@@ -151,7 +145,6 @@ func main() {
 				carDesc, strings.ToUpper(variables.ChargeMode), sessionKwh, psmDesc, fspDesc, deltaUpStr, deltaDownStr, timerLogStr,
 			)
 
-			// Execute API action if permitted by throttling
 			if result.ShouldWriteToWallbox {
 				fmt.Printf("[%s] [API DISPATCH] Pushing new Amperage setting: %d A\n", timestamp, result.TargetAmperage)
 				newValues := map[string]interface{}{"amp": result.TargetAmperage}
@@ -174,12 +167,10 @@ func main() {
 				}
 			}
 
-			// Dynamic sleep timer bound to variables.go configuration
 			time.Sleep(time.Duration(variables.CalculationIntervalMs) * time.Millisecond)
 		}
 	}()
 
-	// Start Web server (blocking main thread)
 	utils.StartWebServer(variables.WebServerPort, status)
 }
 
@@ -190,32 +181,4 @@ func getStatus(ip string) (variables.WbStatus, error) {
 		return status, err
 	}
 	return status, nil
-}
-
-func printStatus(status variables.WbStatus) {
-	fmt.Printf("Charger Name: %s\n", status.Fna)
-	fmt.Printf("Current Amperage limit: %d A\n", status.Amp)
-	fmt.Printf("Car State: %d\n", status.Car)
-
-	var targetMode string
-	switch status.Psm {
-	case 1:
-		targetMode = "Forced 1-Phase"
-	case 2:
-		targetMode = "Forced 3-Phase"
-	default:
-		targetMode = "Automatic"
-	}
-	fmt.Printf("Phase Switch Mode (psm): %s\n", targetMode)
-
-	var activePhases int = 3
-	if status.Fsp {
-		activePhases = 1
-	}
-	fmt.Printf("Active Connected Relay State (fsp): %d-Phase\n", activePhases)
-
-	if len(status.Nrg) > 15 {
-		fmt.Printf("Real-time Power Consumption: %.2f kW\n", status.Nrg[15]/1000.0)
-		fmt.Printf("Line Load currents: L1: %.1fA | L2: %.1fA | L3: %.1fA\n", status.Nrg[6], status.Nrg[7], status.Nrg[8])
-	}
 }

@@ -7,7 +7,7 @@ import (
 // App Meta Information
 var (
 	AppName    = "Wallbox-Controller"
-	AppVersion = "1.0.2"
+	AppVersion = "1.0.3"
 )
 
 // Network Endpoints & Sync Timers
