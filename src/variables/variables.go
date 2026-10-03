@@ -36,6 +36,14 @@ var (
 	WallboxWriteCooldownSec      = 60      // Strict physical API transmission cooldown
 	SetWallboxOnlyIfCarConnected = true    // true = skip idle API writes when unplugged
 	ChargeMode                   = "solar" // ChargeMode can be set to "solar" (PV Hysteresis tracking) or "max" (Force maximum grid power)
+
+	// Efficiency Boost Configurations (Anti-Vampire Load Management)
+	GridThresholdW        = 1500 // If more than (e.g. 1500W) grid import, the system automatically forces 11/22 kW to maximize charging efficiency.
+	GridThresholdDelaySec = 300  // Delay in seconds before triggering the boost after high grid draw
+
+	// NEW: Centralized Hysteresis Buffer Zone
+	// A ± 400W buffer to prevent the charging rate from fluctuating too rapidly
+	HysteresisBufferW = 400
 )
 
 // Live Controller State Values (Updated dynamically at runtime)

@@ -57,12 +57,14 @@ func main() {
 
 	// Main control loop running sequentially in main() thread
 	var lastWriteTime time.Time
-	var lastCarState = 1 // Standby if default
+	var lastCarState = 1            // Standby if default
+	var boostStartTime time.Time    // Tracker for high grid draw delay (Step up)
+	var recoveryStartTime time.Time // Tracker for clear solar return delay (Step down)
 
 	go func() {
 		for {
 			// Trigger calculation and retrieve data structure
-			result := utils.CalculatePVControl(status, &lastWriteTime, &lastCarState)
+			result := utils.CalculatePVControl(status, &lastWriteTime, &lastCarState, &boostStartTime, &recoveryStartTime)
 
 			variables.TargetAmperage = result.TargetAmperage
 			variables.PredictedLeftoverSurplusW = result.PredictedLeftoverSurplusW
