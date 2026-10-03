@@ -21,3 +21,4 @@ secure*
 .DS_Store
 .vscode/
 src/data/*.json
+TODO.md

@@ -4,34 +4,68 @@ import (
 	"runtime"
 )
 
+// App Meta Information
 var (
-	AppName       = "Wallbox-Controller"
-	AppVersion    = "1.0.0"
-	DataSourceDir = "./data"
-	WallboxIp     = "192.168.30.40"
+	AppName    = "Wallbox-Controller"
+	AppVersion = "1.0.0"
 )
 
+// Network Endpoints & Sync Timers
+var (
+	WallboxIp                                 = "192.168.30.40"
+	RefreshIntervalInMillisecondsWallbox      = 2000
+	PrometheusMetricsUrlInverter              = "http://192.168.1.4:2112/metrics"
+	RefreshIntervalInMillisecondsPromInverter = 1000
+)
+
+// Web Server Configurations
+var (
+	WebServerPort = 8080
+	IPv4Only      = true
+	// WebServerAutoReloadIntervalSec defines the browser refresh rate.
+	// 0 means never auto-reload, values > 0 define refresh rate in seconds.
+	WebServerAutoReloadIntervalSec = 10
+)
+
+// Centralized Grid and Hardware Configurations
+var (
+	NominalVoltage               = 230.0
+	MinAmperage                  = 6       // Standard lower boundary for most EVs
+	MaxAmperage                  = 16      // 16 for 11kW, 32 for 22kW
+	CalculationIntervalMs        = 1000    // Loop execution rate for main algorithm
+	WallboxWriteCooldownSec      = 60      // Strict physical API transmission cooldown
+	SetWallboxOnlyIfCarConnected = true    // true = skip idle API writes when unplugged
+	ChargeMode                   = "solar" // ChargeMode can be set to "solar" (PV Hysteresis tracking) or "max" (Force maximum grid power)
+)
+
+// Live Controller State Values (Updated dynamically at runtime)
+var (
+	AvailableSurplusW         float64
+	TargetAmperage            = MinAmperage
+	PredictedLeftoverSurplusW = 0.0
+)
+
+// Runtime System Indicators
 var (
 	GOOS   = runtime.GOOS
 	GOARCH = runtime.GOARCH
 )
 
-// GoEStatus holds a few common v2 API keys for demonstration.
-// Refer to the official docs for the hundreds of available keys.
-type GoEStatus struct {
+// WbStatus holds specific v2 API keys for the go-eCharger.
+type WbStatus struct {
 	Fna string    `json:"fna"` // Friendly Name
 	Amp int       `json:"amp"` // Target Amperage Limit
 	Car int       `json:"car"` // Car Connectivity State
 	Frc int       `json:"frc"` // Force Charging State Override
-	Psm int       `json:"psm"` // Phase Switch Mode (0=Auto, 1=1-Phase, 2=3-Phase)
-	Fsp bool      `json:"fsp"` // Force Single Phase Status (true=1-Phase active)
+	Psm int       `json:"psm"` // Phase Switch Mode
+	Fsp bool      `json:"fsp"` // Force Single Phase Status
 	Nrg []float64 `json:"nrg"` // Array containing Power information
-	Dws float64   `json:"dws"` // Current Session energy delivered in Wh
+	Wh  float64   `json:"wh"`  // Energy charged in Wh (Session)
 }
 
-var ApiStatusFilter = "api/status?filter=fna,amp,car,frc,psm,nrg,dws"
+var ApiStatusFilter = "api/status?filter=fna,amp,car,frc,psm,nrg,wh"
 
-// Define an explicit struct to hold an ordered setting parameter
+// ChargerParam defines an explicit structure to pass ordered control payloads
 type ChargerParam struct {
 	Key   string
 	Value interface{}

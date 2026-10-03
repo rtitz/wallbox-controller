@@ -76,7 +76,7 @@ func SetChargerValues(ipAddress string, params map[string]interface{}) error {
 			return fmt.Errorf("failed to set %s (Status %d): %s", key, resp.StatusCode, string(body))
 		}
 
-		fmt.Printf("Successfully updated [%s]: %s\n", key, string(body))
+		//fmt.Printf("Successfully updated [%s]: %s\n", key, string(body))
 	}
 
 	return nil
