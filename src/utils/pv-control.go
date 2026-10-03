@@ -76,6 +76,8 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 
 	// Mode 1: Force Max Mode is globally active via Web UI
 	if variables.ChargeMode == "max" {
+		*boostStartTime = time.Time{}
+		*recoveryStartTime = time.Time{}
 		result.TargetAmperage = variables.MaxAmperage
 		if currentAmp != variables.MaxAmperage {
 			result.ShouldWriteToWallbox = true
@@ -87,6 +89,8 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 	// Hard connection boundaries and pre-conditioning recovery checks
 	if variables.SetWallboxOnlyIfCarConnected {
 		if carState == 1 {
+			*boostStartTime = time.Time{}
+			*recoveryStartTime = time.Time{}
 			result.TargetAmperage = variables.MinAmperage
 			if currentAmp != variables.MinAmperage {
 				result.ShouldWriteToWallbox = true
@@ -94,7 +98,8 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 			}
 			return result
 		} else if carState == 4 || carState == 3 {
-			// Automatically force 11 kW if charge finished (for morning heating) or waiting
+			*boostStartTime = time.Time{}
+			*recoveryStartTime = time.Time{}
 			result.TargetAmperage = variables.MaxAmperage
 			if currentAmp != variables.MaxAmperage {
 				result.ShouldWriteToWallbox = true
@@ -110,24 +115,31 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 	requiredDelay := time.Duration(variables.GridThresholdDelaySec) * time.Second
 	convertedThreshold := float64(variables.GridThresholdW)
 
+	// Set dynamic target amp tracking baseline
+	calculatedTargetAmp := currentAmp
+
 	if carState == 2 {
 		// CONDITION A: High Total Grid Import -> Trigger 11 kW Boost after sustained delay
-		// If the entire house (including wallbox) draws more than 1500W from the grid, the timer starts.
 		if result.GridSurplus < -convertedThreshold {
 			*recoveryStartTime = time.Time{}
 
-			if boostStartTime.IsZero() {
-				*boostStartTime = time.Now()
-			}
-
-			if time.Since(*boostStartTime) >= requiredDelay {
-				result.TargetAmperage = variables.MaxAmperage
-				result.PredictedLeftoverSurplusW = result.GridSurplus - (float64(variables.MaxAmperage-variables.MinAmperage) * variables.NominalVoltage * float64(result.ActivePhases))
-				if currentAmp != variables.MaxAmperage {
-					result.ShouldWriteToWallbox = true
-					result.IsStatusOverride = true // Bypass standard timers for immediate acceleration
+			// If the wallbox is already running at full capacity, we forcefully clear the clock
+			if currentAmp == variables.MaxAmperage {
+				*boostStartTime = time.Time{}
+			} else {
+				if boostStartTime.IsZero() {
+					*boostStartTime = time.Now()
 				}
-				return result
+				if time.Since(*boostStartTime) >= requiredDelay {
+					// Threshold reached! Set target to max, but let the code fall through
+					// so the memory state registers variables.TargetAmperage cleanly next frame!
+					calculatedTargetAmp = variables.MaxAmperage
+					result.PredictedLeftoverSurplusW = result.GridSurplus - (float64(variables.MaxAmperage-variables.MinAmperage) * variables.NominalVoltage * float64(result.ActivePhases))
+					if currentAmp != variables.MaxAmperage {
+						result.ShouldWriteToWallbox = true
+						result.IsStatusOverride = true
+					}
+				}
 			}
 		} else if currentAmp == variables.MaxAmperage && result.PotentialSolarTotal >= (float64(variables.MinAmperage)*float64(result.ActivePhases)*variables.NominalVoltage)+hysteresisBuffer {
 			// CONDITION B: Genuine Solar Return -> Fall back down after sustained delay
@@ -139,13 +151,11 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 
 			if time.Since(*recoveryStartTime) >= requiredDelay {
 				*recoveryStartTime = time.Time{}
-				result.TargetAmperage = variables.MinAmperage
+				calculatedTargetAmp = variables.MinAmperage
 				result.ShouldWriteToWallbox = true
 				result.IsStatusOverride = true
-				return result
 			} else {
-				result.TargetAmperage = variables.MaxAmperage
-				return result
+				calculatedTargetAmp = variables.MaxAmperage
 			}
 		} else {
 			if result.GridSurplus >= 0 {
@@ -169,31 +179,32 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 	// ------------------------------------------------------------------------
 	// Universal Solar Hysteresis Logic (Symmetrical Deadband)
 	// ------------------------------------------------------------------------
-	targetAmpsStepUp := int((result.PotentialSolarTotal - hysteresisBuffer) / wattPerAmpStep)
-	targetAmpsStepDown := int((result.PotentialSolarTotal + hysteresisBuffer) / wattPerAmpStep)
+	// Only run regular solar scaling if the efficiency engine didn't enforce a hard limit override
+	if calculatedTargetAmp == currentAmp {
+		targetAmpsStepUp := int((result.PotentialSolarTotal - hysteresisBuffer) / wattPerAmpStep)
+		targetAmpsStepDown := int((result.PotentialSolarTotal + hysteresisBuffer) / wattPerAmpStep)
 
-	newAmp := currentAmp
+		if targetAmpsStepUp > currentAmp {
+			calculatedTargetAmp = targetAmpsStepUp
+			if calculatedTargetAmp > variables.MaxAmperage {
+				calculatedTargetAmp = variables.MaxAmperage
+			}
+			powerToSpend := float64(calculatedTargetAmp-currentAmp) * wattPerAmpStep
+			result.PredictedLeftoverSurplusW = result.GridSurplus - powerToSpend
 
-	if targetAmpsStepUp > currentAmp {
-		newAmp = targetAmpsStepUp
-		if newAmp > variables.MaxAmperage {
-			newAmp = variables.MaxAmperage
+		} else if targetAmpsStepDown < currentAmp {
+			calculatedTargetAmp = targetAmpsStepDown
+			if calculatedTargetAmp < variables.MinAmperage {
+				calculatedTargetAmp = variables.MinAmperage
+			}
+			powerSaved := float64(currentAmp-calculatedTargetAmp) * wattPerAmpStep
+			result.PredictedLeftoverSurplusW = result.GridSurplus + powerSaved
 		}
-		powerToSpend := float64(newAmp-currentAmp) * wattPerAmpStep
-		result.PredictedLeftoverSurplusW = result.GridSurplus - powerToSpend
-
-	} else if targetAmpsStepDown < currentAmp {
-		newAmp = targetAmpsStepDown
-		if newAmp < variables.MinAmperage {
-			newAmp = variables.MinAmperage
-		}
-		powerSaved := float64(currentAmp-newAmp) * wattPerAmpStep
-		result.PredictedLeftoverSurplusW = result.GridSurplus + powerSaved
 	}
 
-	result.TargetAmperage = newAmp
+	result.TargetAmperage = calculatedTargetAmp
 
-	if newAmp != currentAmp {
+	if calculatedTargetAmp != currentAmp {
 		cooldownDuration := time.Duration(variables.WallboxWriteCooldownSec) * time.Second
 		if time.Since(*lastWriteTime) >= cooldownDuration || stateChanged {
 			result.ShouldWriteToWallbox = true
