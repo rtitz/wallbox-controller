@@ -15,12 +15,12 @@ var (
 	WallboxIp                                 = "192.168.30.40"
 	RefreshIntervalInMillisecondsWallbox      = 2000
 	PrometheusMetricsUrlInverter              = "http://192.168.1.4:2112/metrics"
-	RefreshIntervalInMillisecondsPromInverter = 1000
+	RefreshIntervalInMillisecondsPromInverter = 2000
 )
 
 // Web Server Configurations
 var (
-	WebServerPort = 8080
+	WebServerPort = 8084
 	IPv4Only      = true
 	// WebServerAutoReloadIntervalSec defines the browser refresh rate.
 	// 0 means never auto-reload, values > 0 define refresh rate in seconds.
@@ -41,9 +41,11 @@ var (
 	GridThresholdW        = 1500 // If more than (e.g. 1500W) grid import, the system automatically forces 11/22 kW to maximize charging efficiency.
 	GridThresholdDelaySec = 300  // Delay in seconds before triggering the boost after high grid draw
 
-	// NEW: Centralized Hysteresis Buffer Zone
-	// A ± 400W buffer to prevent the charging rate from fluctuating too rapidly
-	HysteresisBufferW = 400
+	// SolarHysteresisBandW defines the deadband zone (in Watts) for charging rate adjustments.
+	// A value of 300 means the system requires a stable sustained surplus of at least 300W
+	// above the next step before ramping up, and tolerates up to 300W of grid import
+	// before ramping down. This prevents rapid relay oscillation during passing clouds.
+	SolarHysteresisBandW = 400
 )
 
 // Live Controller State Values (Updated dynamically at runtime)

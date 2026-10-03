@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 	"wallbox-controller/variables"
 )
 
@@ -79,8 +80,21 @@ const webserverCSS = `
 		overflow-x: auto;
 		box-shadow: inset 0 2px 8px rgba(0,0,0,0.2);
 	}
+	.metrics-divider {
+		color: #ffffff; /* NEW: Strictly white for the top metrics headline */
+		font-weight: bold;
+		margin-top: 5px;
+		padding-top: 5px;
+	}
 	.section-divider {
-		color: #0be881;
+		color: #2ecc71; /* RESTORED: Kept at green for Live Grid Management */
+		font-weight: bold;
+		border-top: 1px solid #3d4e5d;
+		margin-top: 15px;
+		padding-top: 15px;
+	}
+	.curl-divider {
+		color: #3498db; /* UNTOUCHED: Kept at blue for Remote Control Commands */
 		font-weight: bold;
 		border-top: 1px solid #3d4e5d;
 		margin-top: 15px;
@@ -114,6 +128,9 @@ func StartWebServer(port int, status *SafeStatus) {
 				}
 
 				_ = WriteSettings(variables.WallboxIp, newValues)
+
+				// Give the go-eCharger hardware 500ms to commit state updates before redirecting
+				time.Sleep(500 * time.Millisecond)
 			}
 		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -150,12 +167,14 @@ func StartWebServer(port int, status *SafeStatus) {
 		}
 
 		fmt.Fprintf(w, "<div class='button-group'>")
-		fmt.Fprintf(w, "<form action='/setmode?mode=solar' method='POST' style='flex:1;'><button type='submit' class='%s'>%s</button></form>", solarBtnClass, solarLabel)
-		fmt.Fprintf(w, "<form action='/setmode?mode=max' method='POST' style='flex:1;'><button type='submit' class='%s'>%s</button></form>", maxBtnClass, maxLabel)
+		fmt.Fprintf(w, "<form action='/setmode?mode=solar' method='POST' style='flex:1;'><button type='submit' class='%s' onclick='setTimeout(function(){location.reload();}, 600);'>%s</button></form>", solarBtnClass, solarLabel)
+		fmt.Fprintf(w, "<form action='/setmode?mode=max' method='POST' style='flex:1;'><button type='submit' class='%s' onclick='setTimeout(function(){location.reload();}, 600);'>%s</button></form>", maxBtnClass, maxLabel)
 		fmt.Fprintf(w, "</div>")
 
 		fmt.Fprintf(w, "<pre>")
-		fmt.Fprintf(w, "--- Wallbox Controller Metrics ---\n")
+
+		// FIX: Assigned the newly created metrics-divider class here for clean white text output
+		fmt.Fprintf(w, "<div class='metrics-divider'>--- Wallbox Controller Metrics ---</div>")
 		fmt.Fprintf(w, "Operational Mode Enforced: %s\n", strings.ToUpper(variables.ChargeMode))
 		fmt.Fprintf(w, "Charger Name:              %s\n", status.Data.Fna)
 		fmt.Fprintf(w, "Current Amperage limit:    %d A\n", status.Data.Amp)
@@ -197,18 +216,15 @@ func StartWebServer(port int, status *SafeStatus) {
 
 		fmt.Fprintf(w, "Energy Charged (Session):  %.2f kWh\n", status.Data.Wh/1000.0)
 
-		// Index [11] Watts in float64
 		if len(status.Data.Nrg) > 11 {
-			totalWattsMeasured := status.Data.Nrg[11] // KORREKTUR: [11] hinzugefügt!
+			totalWattsMeasured := status.Data.Nrg[11]
 			fmt.Fprintf(w, "Measured Consumption:      %.2f kW\n", totalWattsMeasured/1000.0)
 
-			// Calculate amperage per phase: Watt / (Phases * 230V)
 			calculatedAmps := 0.0
 			if totalWattsMeasured > 0 {
 				calculatedAmps = totalWattsMeasured / (float64(activePhases) * variables.NominalVoltage)
 			}
 
-			// Since the car charges symmetrically, we output the calculated real-time current for all active phases
 			currentL1 := calculatedAmps
 			currentL2 := calculatedAmps
 			currentL3 := calculatedAmps
@@ -234,6 +250,18 @@ func StartWebServer(port int, status *SafeStatus) {
 			fmt.Fprintf(w, "Current set Ampere value:  %.0f W / New target Ampere value: %.0f W\n", currentWattsCalculated, targetWattsCalculated)
 			fmt.Fprintf(w, "Available Solar Surplus after Wallbox adjustment:  %.0f W\n", variables.PredictedLeftoverSurplusW)
 		}
+
+		currentHost := r.Host
+		if currentHost == "" {
+			currentHost = fmt.Sprintf("127.0.0.1:%d", port)
+		}
+
+		fmt.Fprintf(w, "<div class='curl-divider'>--- Remote Control Commands Framework ---</div>")
+		fmt.Fprintf(w, "Trigger Solar Mode (Auto):\n")
+		fmt.Fprintf(w, "curl -X POST \"http://%s/setmode?mode=solar\"\n\n", currentHost)
+		fmt.Fprintf(w, "Trigger Max Mode (%.0f kW):\n", maxKWCalculated)
+		fmt.Fprintf(w, "curl -X POST \"http://%s/setmode?mode=max\"\n", currentHost)
+
 		fmt.Fprintf(w, "</pre>")
 		fmt.Fprintf(w, "</div>")
 	})

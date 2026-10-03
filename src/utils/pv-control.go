@@ -19,7 +19,7 @@ type ControlResult struct {
 	IsStatusOverride          bool
 }
 
-// CalculatePVControl executes the complete charging logic and returns the data to main.
+// CalculatePVControl executes the complete hysteresis logic and returns the data to main.
 func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarState *int, boostStartTime *time.Time, recoveryStartTime *time.Time) ControlResult {
 	var result ControlResult
 
@@ -95,11 +95,10 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 	// ------------------------------------------------------------------------
 	requiredDelay := time.Duration(variables.GridThresholdDelaySec) * time.Second
 	convertedThreshold := float64(variables.GridThresholdW)
-	convertedBuffer := float64(variables.HysteresisBufferW)
+	hysteresisBuffer := float64(variables.SolarHysteresisBandW)
 
 	if carState == 2 {
 		// CONDITION A: High Grid Import caused by OTHER appliances -> Trigger Boost
-		// Only triggers if the true available solar capacity falls into deep deficit
 		if currentAmp == variables.MinAmperage && result.PotentialSolarTotal < -convertedThreshold {
 			*recoveryStartTime = time.Time{}
 
@@ -116,7 +115,7 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 				}
 				return result
 			}
-		} else if currentAmp == variables.MaxAmperage && result.PotentialSolarTotal >= (float64(variables.MinAmperage)*float64(result.ActivePhases)*variables.NominalVoltage)+convertedBuffer {
+		} else if currentAmp == variables.MaxAmperage && result.PotentialSolarTotal >= (float64(variables.MinAmperage)*float64(result.ActivePhases)*variables.NominalVoltage)+hysteresisBuffer {
 			// CONDITION B: Genuine Solar Return -> Fall back down after sustained delay
 			*boostStartTime = time.Time{}
 
@@ -154,32 +153,28 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 	}
 
 	// ------------------------------------------------------------------------
-	// Universal Solar Hysteresis Logic
+	// Universal Solar Hysteresis Logic (Symmetrical Deadband)
 	// ------------------------------------------------------------------------
 	wattPerAmpStep := variables.NominalVoltage * float64(result.ActivePhases)
 
-	// Step thresholds evaluate current capacities cleanly
-	targetAmpsStepUp := int((result.PotentialSolarTotal - convertedBuffer) / wattPerAmpStep)
-	targetAmpsStepDown := int((result.PotentialSolarTotal + convertedBuffer) / wattPerAmpStep)
+	// Step thresholds evaluate capacity safely against the centralized deadband
+	targetAmpsStepUp := int((result.PotentialSolarTotal - hysteresisBuffer) / wattPerAmpStep)
+	targetAmpsStepDown := int((result.PotentialSolarTotal + hysteresisBuffer) / wattPerAmpStep)
 
 	newAmp := currentAmp
 
+	// STEP UP: Ramp up if total capacity safely supports the next level with a buffer
 	if targetAmpsStepUp > currentAmp {
 		newAmp = targetAmpsStepUp
 		if newAmp > variables.MaxAmperage {
 			newAmp = variables.MaxAmperage
 		}
-		if newAmp < variables.MinAmperage {
-			newAmp = variables.MinAmperage
-		}
 		powerToSpend := float64(newAmp-currentAmp) * wattPerAmpStep
 		result.PredictedLeftoverSurplusW = result.GridSurplus - powerToSpend
 
+		// STEP DOWN: Ramp down if grid draw breaches the lower deadband boundary
 	} else if targetAmpsStepDown < currentAmp {
 		newAmp = targetAmpsStepDown
-		if newAmp > variables.MaxAmperage {
-			newAmp = variables.MaxAmperage
-		}
 		if newAmp < variables.MinAmperage {
 			newAmp = variables.MinAmperage
 		}
