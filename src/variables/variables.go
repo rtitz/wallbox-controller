@@ -7,7 +7,7 @@ import (
 // App Meta Information
 var (
 	AppName    = "Wallbox-Controller"
-	AppVersion = "1.0.0"
+	AppVersion = "1.0.1"
 )
 
 // Network Endpoints & Sync Timers
@@ -51,6 +51,7 @@ var (
 // Live Controller State Values (Updated dynamically at runtime)
 var (
 	AvailableSurplusW         float64
+	LiveSolarProductionW      float64
 	TargetAmperage            = MinAmperage
 	PredictedLeftoverSurplusW = 0.0
 )

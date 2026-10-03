@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 	"wallbox-controller/utils"
@@ -39,6 +40,7 @@ func main() {
 		}
 	}()
 
+	// Goroutine 2: Refresh Inverter and Grid Data directly from Prometheus
 	go func() {
 		for {
 			allMetrics, err := utils.FetchPrometheusMetrics(variables.PrometheusMetricsUrlInverter)
@@ -48,8 +50,19 @@ func main() {
 			} else {
 				gridPower := allMetrics["total_grid_power_watts"]
 
-				// Negative gridPower = Feeding into grid (Positive AvailableSurplusW)
-				// Positive gridPower = Drawing from grid (Negative AvailableSurplusW)
+				if production, ok := allMetrics["inverter_ac_power_watts"]; ok {
+					variables.LiveSolarProductionW = production
+				} else {
+					status.Mu.RLock()
+					var activePhases int = 3
+					if status.Data.Fsp {
+						activePhases = 1
+					}
+					currentWbPower := float64(status.Data.Amp) * float64(activePhases) * variables.NominalVoltage
+					status.Mu.RUnlock()
+					variables.LiveSolarProductionW = math.Max(0, (-gridPower)+currentWbPower)
+				}
+
 				variables.AvailableSurplusW = -gridPower
 			}
 			time.Sleep(time.Duration(variables.RefreshIntervalInMillisecondsPromInverter) * time.Millisecond)
@@ -67,6 +80,10 @@ func main() {
 		for {
 			// Trigger calculation and retrieve data structure
 			result := utils.CalculatePVControl(status, &lastWriteTime, &lastCarState, &boostStartTime, &recoveryStartTime)
+
+			// FIX: Dynamic timer bridging for the frontend layout engine
+			utils.GlobalLastBoostTime = boostStartTime
+			utils.GlobalLastRecoveryTime = recoveryStartTime
 
 			variables.TargetAmperage = result.TargetAmperage
 			variables.PredictedLeftoverSurplusW = result.PredictedLeftoverSurplusW
@@ -129,12 +146,12 @@ func main() {
 
 			timestamp := time.Now().Format("2006-01-02 15:04:05")
 
-			// RENDER EXTENDED LOG: Appended dynamic step boundaries and active ticking timers
-			fmt.Printf("[%s] [PV-Control] Curr:%d A (%.0fW) | GridSurplus:%.0fW | PotentialSolarTotal:%.0fW | Target:%d A | Car:%s | Mode:%s | Session:%.2f kWh | Psm:%s | Relay:%s | UpIn:%s | DownIn:%s | Timers:%s\n",
-				timestamp, result.CurrentAmperage, result.CalculatedWbPower, result.GridSurplus, result.PotentialSolarTotal, result.TargetAmperage,
+			fmt.Printf("[%s] [PV-Control] Curr:%d A (%.0fW) | PV-Gen:%.0fW | GridSurplus:%.0fW | PotentialSolarTotal:%.0fW | Target:%d A | Car:%s | Mode:%s | Session:%.2f kWh | Psm:%s | Relay:%s | UpIn:%s | DownIn:%s | Timers:%s\n",
+				timestamp, result.CurrentAmperage, result.CalculatedWbPower, variables.LiveSolarProductionW, result.GridSurplus, result.PotentialSolarTotal, result.TargetAmperage,
 				carDesc, strings.ToUpper(variables.ChargeMode), sessionKwh, psmDesc, fspDesc, deltaUpStr, deltaDownStr, timerLogStr,
 			)
 
+			// Execute API action if permitted by throttling
 			if result.ShouldWriteToWallbox {
 				fmt.Printf("[%s] [API DISPATCH] Pushing new Amperage setting: %d A\n", timestamp, result.TargetAmperage)
 				newValues := map[string]interface{}{"amp": result.TargetAmperage}
@@ -145,7 +162,6 @@ func main() {
 					lastWriteTime = time.Now()
 				}
 			} else if result.TargetAmperage != result.CurrentAmperage {
-				// Differentiate why it was blocked for accurate logging
 				status.Mu.RLock()
 				currentCarState := status.Data.Car
 				status.Mu.RUnlock()

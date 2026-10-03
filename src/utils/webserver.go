@@ -281,6 +281,7 @@ func StartWebServer(port int, status *SafeStatus) {
 			timerLogStr = fmt.Sprintf("Solar Recovery Pending (%ds / %ds)", int(time.Since(GlobalLastRecoveryTime).Seconds()), variables.GridThresholdDelaySec)
 		}
 
+		fmt.Fprintf(w, "Current PV Solar Production:     %.0f W\n", variables.LiveSolarProductionW)
 		fmt.Fprintf(w, "True Household Solar Potential:  %.0f W\n", potentialSolarTotal)
 		fmt.Fprintf(w, "Required Power to Step Up (+1A): %s\n", deltaUpStr)
 		fmt.Fprintf(w, "Allowed Drop before Step Down:  %s\n", deltaDownStr)
