@@ -126,7 +126,7 @@ func StartWebServer(port int, status *SafeStatus) {
 			fmt.Fprintf(w, "<meta http-equiv=\"refresh\" content=\"%d\">\n", variables.WebServerAutoReloadIntervalSec)
 		}
 
-		fmt.Fprintf(w, webserverCSS)
+		fmt.Fprint(w, webserverCSS)
 
 		status.Mu.RLock()
 		defer status.Mu.RUnlock()
