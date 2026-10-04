@@ -50,10 +50,11 @@ var (
 
 // Live Controller State Values (Updated dynamically at runtime)
 var (
-	AvailableSurplusW         float64
-	LiveSolarProductionW      float64
-	TargetAmperage            = MinAmperage
-	PredictedLeftoverSurplusW = 0.0
+	AvailableSurplusW          float64
+	LiveSolarProductionW       float64
+	LiveTotalHouseConsumptionW float64
+	TargetAmperage             = MinAmperage
+	PredictedLeftoverSurplusW  = 0.0
 )
 
 // Runtime System Indicators

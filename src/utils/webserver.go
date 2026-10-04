@@ -108,7 +108,6 @@ type SafeStatus struct {
 	Data variables.WbStatus
 }
 
-// Global reference containers to bridge main loop timers over to the webserver thread
 var (
 	GlobalLastBoostTime    time.Time
 	GlobalLastRecoveryTime time.Time
@@ -150,6 +149,8 @@ func StartWebServer(port int, status *SafeStatus) {
 
 		status.Mu.RLock()
 		currentAmp := status.Data.Amp
+		isOnePhase := status.Data.Fsp
+		carState := status.Data.Car
 		status.Mu.RUnlock()
 
 		if currentAmp == 0 {
@@ -186,7 +187,7 @@ func StartWebServer(port int, status *SafeStatus) {
 		fmt.Fprintf(w, "Current Amperage limit:    %d A\n", status.Data.Amp)
 
 		var carStateDesc string
-		switch status.Data.Car {
+		switch carState {
 		case 1:
 			carStateDesc = "Ready (No vehicle connected)"
 		case 2:
@@ -196,7 +197,7 @@ func StartWebServer(port int, status *SafeStatus) {
 		case 4:
 			carStateDesc = "Charge finished (Vehicle still connected)"
 		default:
-			carStateDesc = fmt.Sprintf("Unknown state (%d)", status.Data.Car)
+			carStateDesc = fmt.Sprintf("Unknown state (%d)", carState)
 		}
 		fmt.Fprintf(w, "Car State:                 %s\n", carStateDesc)
 
@@ -212,7 +213,7 @@ func StartWebServer(port int, status *SafeStatus) {
 		fmt.Fprintf(w, "Phase Switch Mode (psm):   %s\n", targetMode)
 
 		var activePhases int = 3
-		if status.Data.Fsp {
+		if isOnePhase {
 			activePhases = 1
 		}
 		fmt.Fprintf(w, "Active Relay State (fsp):  %d-Phase\n", activePhases)
@@ -222,8 +223,15 @@ func StartWebServer(port int, status *SafeStatus) {
 
 		fmt.Fprintf(w, "Energy Charged (Session):  %.2f kWh\n", status.Data.Wh/1000.0)
 
+		// Create a local fake instance frame to read structural data from the central physics engine loop safely
+		var dummyWrite time.Time
+		var dummyCarState = carState
+		var dummyBoost time.Time
+		var dummyRecover time.Time
+		result := CalculatePVControl(status, &dummyWrite, &dummyCarState, &dummyBoost, &dummyRecover)
+
 		if len(status.Data.Nrg) > 11 {
-			totalWattsMeasured := status.Data.Nrg[11]
+			totalWattsMeasured := status.Data.Nrg[11] / 10.0
 			fmt.Fprintf(w, "Measured Consumption:      %.2f kW\n", totalWattsMeasured/1000.0)
 
 			calculatedAmps := 0.0
@@ -239,8 +247,7 @@ func StartWebServer(port int, status *SafeStatus) {
 				currentL3 = 0.0
 			}
 
-			fmt.Fprintf(w, "Line Load Currents:        L1: %.1f A | L2: %.1f A | L3: %.1f A\n",
-				currentL1, currentL2, currentL3)
+			fmt.Fprintf(w, "Line Load Currents:        L1: %.1f A | L2: %.1f A | L3: %.1f A\n", currentL1, currentL2, currentL3)
 		} else {
 			fmt.Fprintf(w, "Measured Consumption:      Calculating...\n")
 			fmt.Fprintf(w, "Line Load Currents:        L1: -- A | L2: -- A | L3: -- A\n")
@@ -251,27 +258,31 @@ func StartWebServer(port int, status *SafeStatus) {
 
 		if variables.ChargeMode == "max" {
 			fmt.Fprintf(w, "Current set Ampere value:  %.0f W / New target Ampere value: %.0f W (Bypassing Solar Control)\n", currentWattsCalculated, float64(variables.MaxAmperage*activePhases)*variables.NominalVoltage)
-			//fmt.Fprintf(w, "Available Solar Surplus after Wallbox adjustment: N/A (Max Mode Forced)\n")
 		} else {
 			fmt.Fprintf(w, "Current set Ampere value:  %.0f W / New target Ampere value: %.0f W\n", currentWattsCalculated, targetWattsCalculated)
-			//fmt.Fprintf(w, "Available Solar Surplus after Wallbox adjustment:  %.0f W\n", variables.PredictedLeftoverSurplusW)
 		}
 
-		wattPerAmpStep := variables.NominalVoltage * float64(activePhases)
-		hysteresisBuffer := float64(variables.SolarHysteresisBandW)
-		potentialSolarTotal := variables.AvailableSurplusW + currentWattsCalculated
+		fmt.Fprintf(w, "Current PV Solar Production:     %.0f W\n", variables.LiveSolarProductionW)
 
-		nextStepUpWatts := float64(currentAmp+1)*wattPerAmpStep + hysteresisBuffer
-		nextStepDownWatts := float64(currentAmp)*wattPerAmpStep - hysteresisBuffer
+		// UNFEHLBAR SYNCED: Displays the exact continuous unverschleierte values from the central algorithm loop
+		fmt.Fprintf(w, "Calculated Net House Load (no EV): %.0f W\n", result.CalculatedHouseLoadWatts)
+		fmt.Fprintf(w, "True Household Solar Potential:  %.0f W\n", result.PotentialSolarTotal)
 
-		deltaUpStr := "Maximum Amperage Reached"
-		if currentAmp < variables.MaxAmperage {
-			deltaUpStr = fmt.Sprintf("%.0f W (Threshold Target: %.0f W)", nextStepUpWatts-potentialSolarTotal, nextStepUpWatts)
-		}
+		if carState == 2 {
+			if status.Data.Amp < variables.MaxAmperage {
+				fmt.Fprintf(w, "Required Power to Step Up (+1A): %.0f W (Threshold Target: %.0f W)\n", result.NextStepUpWatts-result.PotentialSolarTotal, result.NextStepUpWatts)
+			} else {
+				fmt.Fprintf(w, "Required Power to Step Up (+1A): Maximum Amperage Reached\n")
+			}
 
-		deltaDownStr := "Minimum Amperage Reached"
-		if currentAmp > variables.MinAmperage {
-			deltaDownStr = fmt.Sprintf("%.0f W (Threshold Target: %.0f W)", potentialSolarTotal-nextStepDownWatts, nextStepDownWatts)
+			if status.Data.Amp > variables.MinAmperage {
+				fmt.Fprintf(w, "Allowed Drop before Step Down:  %.0f W (Threshold Target: %.0f W)\n", result.PotentialSolarTotal-result.NextStepDownWatts, result.NextStepDownWatts)
+			} else {
+				fmt.Fprintf(w, "Allowed Drop before Step Down:  Minimum Amperage Reached\n")
+			}
+		} else {
+			fmt.Fprintf(w, "Required Power to Step Up (+1A): N/A\n")
+			fmt.Fprintf(w, "Allowed Drop before Step Down:  N/A\n")
 		}
 
 		timerLogStr := "Idle"
@@ -280,11 +291,6 @@ func StartWebServer(port int, status *SafeStatus) {
 		} else if !GlobalLastRecoveryTime.IsZero() {
 			timerLogStr = fmt.Sprintf("Solar Recovery Pending (%ds / %ds)", int(time.Since(GlobalLastRecoveryTime).Seconds()), variables.GridThresholdDelaySec)
 		}
-
-		fmt.Fprintf(w, "Current PV Solar Production:     %.0f W\n", variables.LiveSolarProductionW)
-		fmt.Fprintf(w, "True Household Solar Potential:  %.0f W\n", potentialSolarTotal)
-		fmt.Fprintf(w, "Required Power to Step Up (+1A): %s\n", deltaUpStr)
-		fmt.Fprintf(w, "Allowed Drop before Step Down:  %s\n", deltaDownStr)
 		fmt.Fprintf(w, "Efficiency Engine Timers State:  %s\n", timerLogStr)
 
 		currentHost := r.Host

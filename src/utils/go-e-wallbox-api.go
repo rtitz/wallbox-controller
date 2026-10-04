@@ -81,3 +81,11 @@ func SetChargerValues(ipAddress string, params map[string]interface{}) error {
 
 	return nil
 }
+
+// WriteSettings handles the API payload transmission
+func WriteSettings(ip string, settings map[string]interface{}) error {
+	if err := SetChargerValues(ip, settings); err != nil {
+		return err
+	}
+	return nil
+}

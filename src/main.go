@@ -39,7 +39,7 @@ func main() {
 		}
 	}()
 
-	// Goroutine 2: Refresh Data directly from Prometheus (Authentic Grid tracking 24/7)
+	// Goroutine 2: Refresh Data directly from Prometheus
 	go func() {
 		for {
 			allMetrics, err := utils.FetchPrometheusMetrics(variables.PrometheusMetricsUrlInverter)
@@ -51,16 +51,17 @@ func main() {
 				production := allMetrics["inverter_ac_power_watts"]
 				gridPower := allMetrics["total_grid_power_watts"]
 
-				// FIX: LiveSolarProductionW reads 0W naturally at night when the inverter sleeps.
-				// We don't overwrite the dynamic grid meter readings with fallback dummies anymore!
-				if production == 0 || allMetrics["total_solar_power_watts"] == 0 {
+				// NEW: Direct continuous polling of total house metrics array from Prometheus
+				if totalHouseLoad, ok := allMetrics["total_house_consumption_watts"]; ok {
+					variables.LiveTotalHouseConsumptionW = totalHouseLoad
+				}
+
+				if production == 0 {
 					variables.LiveSolarProductionW = 0.0
 				} else {
 					variables.LiveSolarProductionW = production
 				}
 
-				// The house meter (total_grid_power_watts) stays active and fluid 24/7.
-				// Negative gridPower = Feeding into grid / Positive gridPower = Drawing from grid
 				variables.AvailableSurplusW = -gridPower
 			}
 			time.Sleep(time.Duration(variables.RefreshIntervalInMillisecondsPromInverter) * time.Millisecond)
