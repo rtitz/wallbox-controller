@@ -127,12 +127,23 @@ func StartWebServer(port int, status *SafeStatus) {
 				if variables.ChargeMode == "max" {
 					newValues["amp"] = variables.MaxAmperage
 					fmt.Printf("--> [WEBSERVER INSTANT DISPATCH] Forcing max current immediately: %d A\n", variables.MaxAmperage)
+					_ = WriteSettings(variables.WallboxIp, newValues, status)
 				} else {
-					newValues["amp"] = variables.MinAmperage
-					fmt.Printf("--> [WEBSERVER INSTANT DISPATCH] Reverting to solar base current immediately: %d A\n", variables.MinAmperage)
+					// FIX: Wenn auf SOLAR geschaltet wird, rufen wir sofort die Rechen-Engine auf,
+					// um den mathematisch korrekten Startwert für genau DIESE Sekunde zu ermitteln!
+					// Wir schalten NICHT mehr blind auf 6 A zurück!
+					var dummyWrite time.Time
+					var dummyCarState = status.Data.Car
+					var dummyBoost time.Time
+					var dummyRecover time.Time
+
+					result := CalculatePVControl(status, &dummyWrite, &dummyCarState, &dummyBoost, &dummyRecover)
+
+					newValues["amp"] = result.TargetAmperage
+					fmt.Printf("--> [WEBSERVER INTELLIGENT DISPATCH] Solar mode initialized with calculated target: %d A\n", result.TargetAmperage)
+					_ = WriteSettings(variables.WallboxIp, newValues, status)
 				}
 
-				_ = WriteSettings(variables.WallboxIp, newValues)
 				time.Sleep(500 * time.Millisecond)
 			}
 		}
@@ -223,7 +234,6 @@ func StartWebServer(port int, status *SafeStatus) {
 
 		fmt.Fprintf(w, "Energy Charged (Session):  %.2f kWh\n", status.Data.Wh/1000.0)
 
-		// Create a local fake instance frame to read structural data from the central physics engine loop safely
 		var dummyWrite time.Time
 		var dummyCarState = carState
 		var dummyBoost time.Time
@@ -231,7 +241,7 @@ func StartWebServer(port int, status *SafeStatus) {
 		result := CalculatePVControl(status, &dummyWrite, &dummyCarState, &dummyBoost, &dummyRecover)
 
 		if len(status.Data.Nrg) > 11 {
-			totalWattsMeasured := status.Data.Nrg[11] / 10.0
+			totalWattsMeasured := status.Data.Nrg[11]
 			fmt.Fprintf(w, "Measured Consumption:      %.2f kW\n", totalWattsMeasured/1000.0)
 
 			calculatedAmps := 0.0
@@ -263,8 +273,6 @@ func StartWebServer(port int, status *SafeStatus) {
 		}
 
 		fmt.Fprintf(w, "Current PV Solar Production:     %.0f W\n", variables.LiveSolarProductionW)
-
-		// UNFEHLBAR SYNCED: Displays the exact continuous unverschleierte values from the central algorithm loop
 		fmt.Fprintf(w, "Calculated Net House Load (no EV): %.0f W\n", result.CalculatedHouseLoadWatts)
 		fmt.Fprintf(w, "True Household Solar Potential:  %.0f W\n", result.PotentialSolarTotal)
 

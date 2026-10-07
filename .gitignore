@@ -5,7 +5,7 @@
 *.so
 *.dylib
 #build/*
-bin/*
+bin/
 secure*
 
 # Test binary, built with `go test -c`
@@ -22,3 +22,4 @@ secure*
 .vscode/
 src/data/*.json
 TODO.md
+tmp/

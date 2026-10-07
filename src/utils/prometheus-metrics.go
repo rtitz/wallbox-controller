@@ -9,9 +9,11 @@ import (
 	"time"
 )
 
-// FetchPrometheusMetrics fetches the specified URL, parses all simple
-// metrics, and returns them as a map[string]float64 to main().
+// FetchPrometheusMetrics connects to the specified metrics endpoint,
+// streams the flat-text payload, and parses the fields into a fast map[string]float64.
+// This function avoids heavy reflection or external parsing libraries to maximize efficiency.
 func FetchPrometheusMetrics(url string) (map[string]float64, error) {
+	// Establish a tight timeout boundary to prevent network hangs from blocking the core daemon
 	client := &http.Client{
 		Timeout: 3 * time.Second,
 	}
@@ -29,15 +31,16 @@ func FetchPrometheusMetrics(url string) (map[string]float64, error) {
 	metrics := make(map[string]float64)
 	scanner := bufio.NewScanner(resp.Body)
 
+	// Stream and parse line-by-line to reduce memory pressure during high telemetry volumes
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 
-		// Skip comments or empty lines
+		// Standard OpenMetrics compliance: Ignore empty lines and documentation comments (# HELP / # TYPE)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
-		// Separate fields (metric name and value)
+		// Separate string fields (Format: <metric_name>[{labels}] <value>)
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
@@ -46,20 +49,20 @@ func FetchPrometheusMetrics(url string) (map[string]float64, error) {
 		metricName := fields[0]
 		valueStr := fields[1]
 
-		// Remove optional label braces {...} from the metric name
-		// if present (e.g., for promhttp_metric_handler_requests_total)
+		// Label Strip Guard: Truncate everything starting from the bracket '{' opening sequence
+		// to collapse labeled multi-dimensional metrics into a single aggregated map key entry.
 		if idx := strings.Index(metricName, "{"); idx != -1 {
 			metricName = metricName[:idx]
 		}
 
-		// Convert value to float64
+		// Parse the value string into a standardized float64 numeric model footprint
 		value, err := strconv.ParseFloat(valueStr, 64)
 		if err != nil {
-			// If a line cannot be converted, skip it
+			// Quietly drop invalid, non-numeric lines or stale formatting
 			continue
 		}
 
-		// Insert into the map
+		// Insert or overwrite the parsed telemetry float metric cell into the return dataset map
 		metrics[metricName] = value
 	}
 

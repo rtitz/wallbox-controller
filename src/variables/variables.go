@@ -7,24 +7,32 @@ import (
 // App Meta Information
 var (
 	AppName    = "Wallbox-Controller"
-	AppVersion = "1.0.3"
+	AppVersion = "1.0.4"
 )
 
-// Network Endpoints & Sync Timers
+// Wallbox Network Configuration
 var (
-	WallboxIp                                 = "192.168.30.40"
-	RefreshIntervalInMillisecondsWallbox      = 2000
+	WallboxIp                            = "192.168.30.40"
+	RefreshIntervalInMillisecondsWallbox = 2000
+)
+
+// Inverter metrics
+var (
 	PrometheusMetricsUrlInverter              = "http://192.168.1.4:2112/metrics"
 	RefreshIntervalInMillisecondsPromInverter = 2000
+
+	// Prometheus Metric Key Mapping Configuration
+	// Tying the exact exporter signatures to variables for effortless infrastructure changes
+	MetricKeyInverterProduction = "inverter_ac_power_watts"
+	MetricKeyTotalGridPower     = "total_grid_power_watts"
+	MetricKeyTotalHouseLoad     = "total_house_consumption_watts"
 )
 
 // Web Server Configurations
 var (
-	WebServerPort = 8084
-	IPv4Only      = true
-	// WebServerAutoReloadIntervalSec defines the browser refresh rate.
-	// 0 means never auto-reload, values > 0 define refresh rate in seconds.
-	WebServerAutoReloadIntervalSec = 10
+	WebServerPort                  = 8084
+	IPv4Only                       = true
+	WebServerAutoReloadIntervalSec = 10 // Browser UI card refresh frequency baseline in seconds
 )
 
 // Centralized Grid and Hardware Configurations
@@ -35,17 +43,19 @@ var (
 	CalculationIntervalMs        = 1000    // Loop execution rate for main algorithm
 	WallboxWriteCooldownSec      = 60      // Strict physical API transmission cooldown
 	SetWallboxOnlyIfCarConnected = true    // true = skip idle API writes when unplugged
-	ChargeMode                   = "solar" // ChargeMode can be set to "solar" (PV Hysteresis tracking) or "max" (Force maximum grid power)
+	ChargeMode                   = "solar" // "solar" (PV Hysteresis tracking) or "max" (Force maximum grid power)
 
 	// Efficiency Boost Configurations (Anti-Vampire Load Management)
 	GridThresholdW        = 1500 // If more than (e.g. 1500W) grid import, the system automatically forces 11/22 kW to maximize charging efficiency.
 	GridThresholdDelaySec = 300  // Delay in seconds before triggering the boost after high grid draw
 
 	// SolarHysteresisBandW defines the deadband zone (in Watts) for charging rate adjustments.
-	// A value of 300 means the system requires a stable sustained surplus of at least 300W
-	// above the next step before ramping up, and tolerates up to 300W of grid import
-	// before ramping down. This prevents rapid relay oscillation during passing clouds.
+	// Prevents rapid relay/contactor oscillation during passing clouds.
 	SolarHysteresisBandW = 400
+
+	// Logging for write actions to the Wallbox API
+	WriteLogEnabled  = true
+	WriteLogFilePath = "log/wallbox_writes.log" // Relocated directory hierarchy perfect for external volume persistence mapping
 )
 
 // Live Controller State Values (Updated dynamically at runtime)
@@ -66,16 +76,19 @@ var (
 // WbStatus holds specific v2 API keys for the go-eCharger.
 type WbStatus struct {
 	Fna string    `json:"fna"` // Friendly Name
-	Amp int       `json:"amp"` // Target Amperage Limit
+	Amp int       `json:"amp"` // Persistent Target Amperage Limit (EEPROM write)
+	Amx int       `json:"amx"` // Non-persistent Target Amperage Limit (volatile RAM write)
 	Car int       `json:"car"` // Car Connectivity State (1 = unplugged, 2 = charging, 3 = connected but waiting, 4 = charge finished)
 	Frc int       `json:"frc"` // Force Charging State Override
 	Psm int       `json:"psm"` // Phase Switch Mode
 	Fsp bool      `json:"fsp"` // Force Single Phase Status
-	Nrg []float64 `json:"nrg"` // Array containing Power information
+	Nrg []float64 `json:"nrg"` // Array containing Power information (Index 11 = Total active real-time power)
 	Wh  float64   `json:"wh"`  // Energy charged in Wh (Session)
 }
 
-var ApiStatusFilter = "api/status?filter=fna,amp,car,frc,psm,nrg,wh"
+// ApiStatusFilter builds the streamlined REST GET request signature.
+// UPDATED: Appended the critical 'amx' register tracking field.
+var ApiStatusFilter = "api/status?filter=fna,amp,amx,car,frc,psm,nrg,wh"
 
 // ChargerParam defines an explicit structure to pass ordered control payloads
 type ChargerParam struct {

@@ -1,0 +1,22 @@
+services:
+  wallbox-controller:
+    container_name: wallbox-controller
+    build:
+      context: .
+      dockerfile: Containerfile 
+    image: localhost/wallbox-controller:latest
+    ports:
+      - "8084:8084"
+    environment:
+      - TZ=Europe/Berlin
+    volumes:
+      - ./tmp/container/data/log:/app/log:Z
+    userns_mode: keep-id
+    restart: unless-stopped
+
+    # Automated native Podman/Docker log rotation for standard terminal streams (fmt.Printf)
+    logging:
+      driver: k8s-file
+      options:
+        max-size: "10mb"
+        max-file: "3"

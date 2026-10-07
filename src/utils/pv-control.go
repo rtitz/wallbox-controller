@@ -63,7 +63,7 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 	result.CalculatedWbPower = float64(result.CurrentAmperage) * float64(result.ActivePhases) * variables.NominalVoltage
 	result.GridSurplus = variables.AvailableSurplusW
 
-	// UNFEHLBAR: Real House Load = Total House Consumption (Prometheus) - Active Wallbox Power
+	// Real House Load = Total House Consumption (Prometheus) - Active Wallbox Power
 	// If Prometheus is fetching stale data at night, the formula naturally balances via the wallbox payload.
 	result.CalculatedHouseLoadWatts = math.Max(0, variables.LiveTotalHouseConsumptionW-realWbPowerMeasured)
 
