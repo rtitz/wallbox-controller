@@ -7,7 +7,7 @@ import (
 // App Meta Information
 var (
 	AppName    = "Wallbox-Controller"
-	AppVersion = "1.0.4"
+	AppVersion = "1.0.5"
 )
 
 // Wallbox Network Configuration
@@ -38,12 +38,13 @@ var (
 // Centralized Grid and Hardware Configurations
 var (
 	NominalVoltage               = 230.0
-	MinAmperage                  = 6       // Standard lower boundary for most EVs
-	MaxAmperage                  = 16      // 16 for 11kW, 32 for 22kW
-	CalculationIntervalMs        = 1000    // Loop execution rate for main algorithm
-	WallboxWriteCooldownSec      = 60      // Strict physical API transmission cooldown
-	SetWallboxOnlyIfCarConnected = true    // true = skip idle API writes when unplugged
-	ChargeMode                   = "solar" // "solar" (PV Hysteresis tracking) or "max" (Force maximum grid power)
+	MinAmperage                  = 6    // Standard lower boundary for most EVs
+	MaxAmperage                  = 16   // 16 for 11kW, 32 for 22kW
+	CalculationIntervalMs        = 2000 // Loop execution rate for main algorithm
+	WallboxWriteCooldownSec      = 60   // Strict physical API transmission cooldown
+	SetWallboxOnlyIfCarConnected = true // true = skip idle API writes when unplugged
+	//WallboxApiWriteToEeprom      = false   // true = write to EEPROM (persistent), false = write only to volatile RAM (amx)
+	ChargeMode = "solar" // "solar" (PV Hysteresis tracking) or "max" (Force maximum grid power)
 
 	// Efficiency Boost Configurations (Anti-Vampire Load Management)
 	GridThresholdW        = 1500 // If more than (e.g. 1500W) grid import, the system automatically forces 11/22 kW to maximize charging efficiency.

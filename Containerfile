@@ -1,5 +1,5 @@
 # --- Stage 1: Build the Go application ---
-FROM docker.io/library/golang:1.27.1-alpine AS builder
+FROM docker.io/library/golang:1.27.2-alpine AS builder
 
 # Set the working directory inside the container
 WORKDIR /app
