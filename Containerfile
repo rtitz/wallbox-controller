@@ -11,8 +11,13 @@ RUN go mod download
 # Copy the rest of the application source code
 COPY src/ .
 
+# Timezone for build number generation
+ENV TZ=Europe/Berlin
+
 # Build a statically linked, production-optimized binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o wallbox-controller .
+RUN go_var_path="main.BuildNumber" && \
+    build_number=$(date +'%Y-%m-%dT%H:%M:%SZ') && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s -X $go_var_path=$build_number" -o wallbox-controller .
 
 # --- Stage 2: Final lightweight image ---
 FROM alpine:latest
