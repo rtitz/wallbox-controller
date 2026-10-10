@@ -10,7 +10,7 @@ services:
     environment:
       - TZ=Europe/Berlin
     volumes:
-      - ./tmp/container/data/log:/app/log:Z
+      - ~/app-data/wallbox-controller:/app/log:Z
     userns_mode: keep-id
     restart: unless-stopped
 

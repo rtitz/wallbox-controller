@@ -121,7 +121,7 @@ This approach automatically provisions persistent volume layout mapping (`log/`)
 
 ```bash
 # Initialize, compile, and launch the complete stack in detached background mode
-podman-compose up -d --build --force-recreate
+podman-compose up -d --build --force-recreate ; podman image prune -f
 
 # Recompile the source code and apply internal changes seamlessly on the fly to specific container
 podman-compose build wallbox-controller && podman-compose up -d
