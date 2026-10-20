@@ -95,6 +95,19 @@ func SetChargerValues(ipAddress string, params map[string]interface{}, status *S
 
 // WriteSettings handles the API payload transmission and triggers the file logger upon success
 func WriteSettings(ip string, settings map[string]interface{}, status *SafeStatus) error {
+	// 1. EXTRACT AND VALIDATE TARGET AMPERE VALUE FROM THE REQUEST
+	if targetAmp, ok := settings["amp"].(int); ok {
+		status.Mu.RLock()
+		currentAmp := status.Data.Amp
+		status.Mu.RUnlock()
+
+		// 2. ABSOLUTE GUARD: If the hardware is already at the target, drop the write entirely
+		if targetAmp == currentAmp {
+			// Exit early without touching the network or writing to logs
+			return nil
+		}
+	}
+
 	// Pass the safe status container down to evaluate the EEPROM safety check
 	if err := SetChargerValues(ip, settings, status); err != nil {
 		return err
