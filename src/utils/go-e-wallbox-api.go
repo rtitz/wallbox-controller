@@ -38,23 +38,26 @@ func GetChargerStatus(ipAddress string, filterPath string, target interface{}) e
 	return json.NewDecoder(resp.Body).Decode(target)
 }
 
-// SetChargerValues loops through parameters and applies them ONLY if they deviate from thread-local reality.
+// SetChargerValues loops through parameters and applies them safely.
 func SetChargerValues(ipAddress string, params map[string]interface{}, status *SafeStatus) error {
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	for key, value := range params {
-		// HARDWARE PROTECTION GUARD: If we are updating the amperage string "amp"
-		if key == "amp" {
-			if targetAmp, ok := value.(int); ok {
-				// ABSOLUTE RAM-GUARD: Compares against the instant thread-local memory footprint.
-				// This catches rapid consecutive duplicate writes within microseconds!
-				if targetAmp == lastWrittenAmperage {
-					// Drop execution quietly without hitting the network card or writing logs
-					return nil
-				}
+	// 1. GLOBAL AMPERE GUARD: Evaluate BEFORE looping through keys
+	if value, exists := params["amp"]; exists {
+		if targetAmp, ok := value.(int); ok {
+			// If the target already matches our memory tracking frame, remove it from the map payload!
+			if targetAmp == lastWrittenAmperage {
+				delete(params, "amp")
 			}
 		}
+	}
 
+	// 2. QUICK LEAK CHECK: If 'amp' was the only setting and we removed it, exit early without network activity
+	if len(params) == 0 {
+		return nil
+	}
+
+	for key, value := range params {
 		// Proceed with network dispatch if value actually changed
 		rawURL := fmt.Sprintf("http://%s/api/set", ipAddress)
 		u, err := url.Parse(rawURL)
@@ -75,14 +78,17 @@ func SetChargerValues(ipAddress string, params map[string]interface{}, status *S
 		if err != nil {
 			return fmt.Errorf("http request failed for key %s: %w", key, err)
 		}
-		defer resp.Body.Close()
 
-		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("failed to set %s (Status %d): %s", key, resp.StatusCode, string(body))
-		}
+		// Create an internal scope scope defer to handle immediate multi-key loop closures cleanly
+		func() {
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				fmt.Errorf("failed to set %s (Status %d): %s", key, resp.StatusCode, string(body))
+			}
+		}()
 
-		// SUCCESS: Lock the local memory cell immediately after a verified hardware return statement
+		// SUCCESS: Update our local tracking cache block safely
 		if key == "amp" {
 			if targetAmp, ok := value.(int); ok {
 				lastWrittenAmperage = targetAmp
@@ -103,8 +109,13 @@ func WriteSettings(ip string, settings map[string]interface{}, status *SafeStatu
 
 		// 2. ABSOLUTE GUARD: If the hardware is already at the target, drop the write entirely
 		if targetAmp == currentAmp {
-			// Exit early without touching the network or writing to logs
-			return nil
+			// Initialize sync matching so immediate fallback sequences check correctly
+			lastWrittenAmperage = targetAmp
+
+			// If 'amp' is the only thing we want to write, block execution right here
+			if len(settings) == 1 {
+				return nil
+			}
 		}
 	}
 
@@ -122,8 +133,11 @@ func WriteSettings(ip string, settings map[string]interface{}, status *SafeStatu
 		activePhases = 1
 	}
 
+	// Only print a physical hardware log line if the 'amp' parameter actually traveled down the wire
 	if targetAmp, ok := settings["amp"].(int); ok {
-		LogApiWrite(targetAmp, activePhases)
+		if targetAmp == lastWrittenAmperage {
+			LogApiWrite(targetAmp, activePhases)
+		}
 	}
 
 	return nil
@@ -131,22 +145,17 @@ func WriteSettings(ip string, settings map[string]interface{}, status *SafeStatu
 
 // LogApiWrite appends every successful hardware API write to a localized flat file framework.
 func LogApiWrite(targetAmp int, activePhases int) {
-	// return early if logging is disabled
 	if !variables.WriteLogEnabled {
 		return
 	}
 
-	// 1. EXTRACT THE DIRECTORY PATH: Safely strips the filename to isolate the folder structure (e.g., "data/log")
 	dirPath := filepath.Dir(variables.WriteLogFilePath)
-
-	// 2. DIRECTORY SANITY GUARD: Create the complete folder tree path if it does not exist yet
 	if err := os.MkdirAll(dirPath, 0755); err != nil {
 		fmt.Printf("[%s] [LOG ERROR] Failed to provision directory tree structures %s: %v\n",
 			time.Now().Format("2006-01-02 15:04:05"), dirPath, err)
 		return
 	}
 
-	// 3. Open the file in Append mode, create it if it doesn't exist, set standard permissions
 	file, err := os.OpenFile(variables.WriteLogFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		fmt.Printf("[%s] [LOG ERROR] Could not open write log file: %v\n", time.Now().Format("2006-01-02 15:04:05"), err)
