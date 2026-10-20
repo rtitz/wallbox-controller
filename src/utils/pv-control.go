@@ -159,8 +159,12 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 			if time.Since(*recoveryStartTime) >= requiredDelay {
 				*recoveryStartTime = time.Time{}
 				calculatedTargetAmp = variables.MinAmperage
-				result.ShouldWriteToWallbox = true
-				result.IsStatusOverride = true
+
+				// FIX: Only flag a hardware write if the charger isn't already at MinAmpere
+				if currentAmp != variables.MinAmperage {
+					result.ShouldWriteToWallbox = true
+					result.IsStatusOverride = true
+				}
 			} else {
 				calculatedTargetAmp = variables.MaxAmperage
 			}
