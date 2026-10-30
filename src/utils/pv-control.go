@@ -97,9 +97,10 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 		return result
 	}
 
-	// Hard connection boundaries
+	// Hard connection boundaries Car Connectivity State (1 = unplugged, 2 = charging, 3 = connected but waiting, 4 = charge finished)
 	if variables.SetWallboxOnlyIfCarConnected {
-		if carState == 1 {
+		switch carState {
+		case 1: // 1 = unplugged
 			*boostStartTime = time.Time{}
 			*recoveryStartTime = time.Time{}
 			result.TargetAmperage = variables.MinAmperage
@@ -108,13 +109,16 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 				result.IsStatusOverride = true
 			}
 			return result
-		} else if carState == 4 || carState == 3 {
+		case 4, 3: // 3 = connected but waiting, 4 = charge finished
 			*boostStartTime = time.Time{}
 			*recoveryStartTime = time.Time{}
-			result.TargetAmperage = variables.MaxAmperage
-			if currentAmp != variables.MaxAmperage {
-				result.ShouldWriteToWallbox = true
-				result.IsStatusOverride = true
+			result.TargetAmperage = currentAmp
+			if variables.SetMaxAmperageWhenConnectedAndNotCharging {
+				result.TargetAmperage = variables.MaxAmperage
+				if currentAmp != variables.MaxAmperage {
+					result.ShouldWriteToWallbox = true
+					result.IsStatusOverride = true
+				}
 			}
 			return result
 		}
@@ -128,7 +132,7 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 
 	calculatedTargetAmp := currentAmp
 
-	if carState == 2 {
+	if carState == 2 { // 2 = charging
 		// CONDITION A: High Total Grid Import -> Trigger Boost
 		// Only tracks if it is pitch black night (PV Gen == 0) and the grid deficit is heavy.
 		if result.GridSurplus < -convertedThreshold && variables.LiveSolarProductionW == 0.0 {
@@ -190,7 +194,7 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 	// ------------------------------------------------------------------------
 	// Universal Solar Hysteresis Logic (Symmetrical Deadband)
 	// ------------------------------------------------------------------------
-	if calculatedTargetAmp == currentAmp && carState == 2 {
+	if calculatedTargetAmp == currentAmp && carState == 2 { // 2 = charging
 		targetAmpsStepUp := int((result.PotentialSolarTotal - hysteresisBuffer) / wattPerAmpStep)
 		targetAmpsStepDown := int((result.PotentialSolarTotal + hysteresisBuffer) / wattPerAmpStep)
 

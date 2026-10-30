@@ -84,7 +84,7 @@ func SetChargerValues(ipAddress string, params map[string]interface{}, status *S
 			defer resp.Body.Close()
 			body, _ := io.ReadAll(resp.Body)
 			if resp.StatusCode != http.StatusOK {
-				fmt.Errorf("failed to set %s (Status %d): %s", key, resp.StatusCode, string(body))
+				_ = fmt.Errorf("failed to set %s (Status %d): %s", key, resp.StatusCode, string(body))
 			}
 		}()
 

@@ -7,7 +7,7 @@ import (
 // App Meta Information
 var (
 	AppName    = "Wallbox-Controller"
-	AppVersion = "1.0.6"
+	AppVersion = "1.0.7"
 )
 
 // Wallbox Network Configuration
@@ -37,14 +37,15 @@ var (
 
 // Centralized Grid and Hardware Configurations
 var (
-	NominalVoltage               = 230.0
-	MinAmperage                  = 6       // Standard lower boundary for most EVs
-	MaxAmperage                  = 16      // 16 for 11kW, 32 for 22kW
-	CalculationIntervalMs        = 2000    // Loop execution rate for main algorithm
-	WallboxWriteCooldownSec      = 60      // Strict physical API transmission cooldown
-	ChargeMode                   = "solar" // "solar" (PV Hysteresis tracking) or "max" (Force maximum grid power)
-	SetWallboxOnlyIfCarConnected = true    // true = skip idle API writes when unplugged
-	WallboxApiWriteToEeprom      = true    // true = write to EEPROM (persistent), false = write only to volatile RAM (amx)
+	NominalVoltage                            = 230.0
+	MinAmperage                               = 6       // Standard lower boundary for most EVs
+	MaxAmperage                               = 16      // 16 for 11kW, 32 for 22kW
+	CalculationIntervalMs                     = 2000    // Loop execution rate for main algorithm
+	WallboxWriteCooldownSec                   = 60      // Strict physical API transmission cooldown
+	ChargeMode                                = "solar" // "solar" (PV Hysteresis tracking) or "max" (Force maximum grid power)
+	SetMaxAmperageWhenConnectedAndNotCharging = false   // true = automatically set max amperage when car finishes charging
+	SetWallboxOnlyIfCarConnected              = true    // true = skip idle API writes when unplugged
+	WallboxApiWriteToEeprom                   = true    // true = write to EEPROM (persistent), false = write only to volatile RAM (amx)
 	// TODO: WallboxApiWriteToEeprom FALSE: NEEDS TO BE IMPLEMENTED. FALSE WILL STILL WRITE TO EEPROM CURRENTLY ONLY DISABLE WEB OUTPUT!
 
 	// Efficiency Boost Configurations (Anti-Vampire Load Management)
