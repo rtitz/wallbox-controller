@@ -29,6 +29,8 @@ RUN apk add --no-cache tzdata
 
 # Copy the compiled binary from the builder stage
 COPY --from=builder /app/wallbox-controller .
+# FORCE execution permissions inside the container image
+RUN chmod +x /app/wallbox-controller
 
 # Expose port
 EXPOSE 8084
