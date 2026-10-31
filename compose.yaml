@@ -11,7 +11,7 @@ services:
       - TZ=Europe/Berlin
     volumes:
       - ~/app-data/wallbox-controller:/app/log:Z
-    userns_mode: keep-id
+    #userns_mode: keep-id
     restart: unless-stopped
 
     # Automated native Podman/Docker log rotation for standard terminal streams (fmt.Printf)
