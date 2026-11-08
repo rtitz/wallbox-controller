@@ -1,24 +1,34 @@
 package variables
 
 import (
+	"os"
 	"runtime"
 )
+
+// getEnv checks for an environment variable, returning the fallback if it doesn't exist
+func getEnv[T any](key string, fallback T) T {
+	if value, exists := os.LookupEnv(key); exists {
+		// Go requires converting to 'any' before type-asserting to our generic type T
+		return any(value).(T)
+	}
+	return fallback
+}
 
 // App Meta Information
 var (
 	AppName    = "Wallbox-Controller"
-	AppVersion = "1.0.7"
+	AppVersion = "1.0.8"
 )
 
 // Wallbox Network Configuration
 var (
-	WallboxIp                            = "192.168.30.40"
+	WallboxIp                            = getEnv("WALLBOX_IP", "192.168.30.40")
 	RefreshIntervalInMillisecondsWallbox = 2000
 )
 
 // Inverter metrics
 var (
-	PrometheusMetricsUrlInverter              = "http://192.168.1.4:2112/metrics"
+	PrometheusMetricsUrlInverter              = getEnv("PROMETHEUS_METRICS_URL_INVERTER", "http://127.0.0.1:2112/metrics")
 	RefreshIntervalInMillisecondsPromInverter = 2000
 
 	// Prometheus Metric Key Mapping Configuration
@@ -30,22 +40,22 @@ var (
 
 // Web Server Configurations
 var (
-	WebServerPort                  = 8084
-	IPv4Only                       = true
-	WebServerAutoReloadIntervalSec = 10 // Browser UI card refresh frequency baseline in seconds
+	WebServerPort                  = getEnv("WEB_SERVER_PORT", 8084)
+	IPv4Only                       = getEnv("WEB_SERVER_IPV4_ONLY", true)
+	WebServerAutoReloadIntervalSec = getEnv("WEB_SERVER_AUTO_RELOAD_INTERVAL_SEC", 10) // Browser UI card refresh frequency baseline in seconds
 )
 
 // Centralized Grid and Hardware Configurations
 var (
 	NominalVoltage                            = 230.0
-	MinAmperage                               = 6       // Standard lower boundary for most EVs
-	MaxAmperage                               = 16      // 16 for 11kW, 32 for 22kW
-	CalculationIntervalMs                     = 2000    // Loop execution rate for main algorithm
-	WallboxWriteCooldownSec                   = 60      // Strict physical API transmission cooldown
-	ChargeMode                                = "solar" // "solar" (PV Hysteresis tracking) or "max" (Force maximum grid power)
-	SetMaxAmperageWhenConnectedAndNotCharging = false   // true = automatically set max amperage when car finishes charging
-	SetWallboxOnlyIfCarConnected              = true    // true = skip idle API writes when unplugged
-	WallboxApiWriteToEeprom                   = true    // true = write to EEPROM (persistent), false = write only to volatile RAM (amx)
+	MinAmperage                               = getEnv("MIN_AMPERE", 6)  // Standard lower boundary for most EVs
+	MaxAmperage                               = getEnv("MAX_AMPERE", 16) // 16 for 11kW, 32 for 22kW
+	CalculationIntervalMs                     = 2000                     // Loop execution rate for main algorithm
+	WallboxWriteCooldownSec                   = 60                       // Strict physical API transmission cooldown
+	ChargeMode                                = "solar"                  // "solar" (PV Hysteresis tracking) or "max" (Force maximum grid power)
+	SetMaxAmperageWhenConnectedAndNotCharging = false                    // true = automatically set max amperage when car finishes charging
+	SetWallboxOnlyIfCarConnected              = true                     // true = skip idle API writes when unplugged
+	WallboxApiWriteToEeprom                   = true                     // true = write to EEPROM (persistent), false = write only to volatile RAM (amx)
 	// TODO: WallboxApiWriteToEeprom FALSE: NEEDS TO BE IMPLEMENTED. FALSE WILL STILL WRITE TO EEPROM CURRENTLY ONLY DISABLE WEB OUTPUT!
 
 	// Efficiency Boost Configurations (Anti-Vampire Load Management)
@@ -57,8 +67,8 @@ var (
 	SolarHysteresisBandW = 400
 
 	// Logging for write actions to the Wallbox API
-	WriteLogEnabled  = true
-	WriteLogFilePath = "log/wallbox_writes.log" // Relocated directory hierarchy perfect for external volume persistence mapping
+	WriteLogEnabled  = getEnv("WRITE_LOG_ENABLED", true)
+	WriteLogFilePath = getEnv("WRITE_LOG_FILE_PATH", "log/wallbox_writes.log") // Relocated directory hierarchy perfect for external volume persistence mapping
 )
 
 // Live Controller State Values (Updated dynamically at runtime)

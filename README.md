@@ -178,3 +178,19 @@ mv container-wallbox-controller.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now container-wallbox-controller.service
 ```
+
+---
+
+### Configuration Environment Variables
+
+| Environment Variable | Description | Expected Type | Default Value |
+| :--- | :--- | :--- | :--- |
+| **`WALLBOX_IP`** | Static network destination IP address of your physical go-eCharger hardware. | String | `192.168.30.40` |
+| **`PROMETHEUS_METRICS_URL_INVERTER`** | Endpoint URL where the inverter's Prometheus telemetry metrics are scraped. | String | `http://127.0.0.1:2112/metrics` |
+| **`WEB_SERVER_PORT`** | Active network port binding configuration for the internal web engine framework. | Integer | `8084` |
+| **`WEB_SERVER_IPV4_ONLY`** | Binds the built-in HTTP server listening layer strictly to the IPv4 loopback socket stack. | Boolean | `true` |
+| **`WEB_SERVER_AUTO_RELOAD_INTERVAL_SEC`** | Controls how frequently the browser frontend card layout refreshes its status metrics. | Integer | `10` |
+| **`MIN_AMPERE`** | Absolute lower current control constraint boundary for vehicle power delivery. | Integer | `6` |
+| **`MAX_AMPERE`** | Absolute ceiling current control constraint boundary (e.g., 16 for 11kW, 32 for 22kW). | Integer | `16` |
+| **`WRITE_LOG_ENABLED`** | Toggles whether API execution parameters are tracked locally on the host storage disk. | Boolean | `true` |
+| **`WRITE_LOG_FILE_PATH`** | Destination filesystem pathway map for saving the physical engine transition records. | String | `log/wallbox_writes.log` |
