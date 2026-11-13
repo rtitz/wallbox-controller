@@ -128,14 +128,11 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 	// Efficiency Boost Engine (Sustained Grid Import Management)
 	// ------------------------------------------------------------------------
 	requiredDelay := time.Duration(variables.GridThresholdDelaySec) * time.Second
-	convertedThreshold := float64(variables.GridThresholdW)
-
 	calculatedTargetAmp := currentAmp
 
 	if carState == 2 { // 2 = charging
-		// CONDITION A: High Total Grid Import -> Trigger Boost
-		// Only tracks if it is pitch black night (PV Gen == 0) and the grid deficit is heavy.
-		if result.GridSurplus < -convertedThreshold && variables.LiveSolarProductionW == 0.0 {
+		// CONDITION A: Pitch black night (PV Gen == 0) -> Trigger Boost
+		if variables.LiveSolarProductionW == 0.0 {
 			*recoveryStartTime = time.Time{}
 
 			if currentAmp == variables.MaxAmperage {
@@ -164,7 +161,6 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 				*recoveryStartTime = time.Time{}
 				calculatedTargetAmp = variables.MinAmperage
 
-				// FIX: Only flag a hardware write if the charger isn't already at MinAmpere
 				if currentAmp != variables.MinAmperage {
 					result.ShouldWriteToWallbox = true
 					result.IsStatusOverride = true
@@ -173,12 +169,9 @@ func CalculatePVControl(status *SafeStatus, lastWriteTime *time.Time, lastCarSta
 				calculatedTargetAmp = variables.MaxAmperage
 			}
 		} else {
-			if result.GridSurplus >= 0 || variables.LiveSolarProductionW > 0.0 {
-				*boostStartTime = time.Time{}
-			}
-			if result.PotentialSolarTotal < -convertedThreshold {
-				*recoveryStartTime = time.Time{}
-			}
+			// Solar is > 0W, but not yet enough to sustain MinAmperage + hysteresis
+			*boostStartTime = time.Time{}
+			*recoveryStartTime = time.Time{}
 		}
 
 		// CRITICAL LOCK: Hold 16 A firmly ONLY if it's pitch black night.
