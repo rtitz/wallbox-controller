@@ -17,7 +17,7 @@ func getEnv[T any](key string, fallback T) T {
 // App Meta Information
 var (
 	AppName    = "Wallbox-Controller"
-	AppVersion = "1.0.8"
+	AppVersion = "1.0.9"
 )
 
 // Wallbox Network Configuration

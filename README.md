@@ -8,24 +8,26 @@ The architecture focuses on maximizing solar self-consumption, protecting chargi
 
 ## 🚀 Key Features
 
-* **Symmetrical Deadband Hysteresis:** Eliminates relay and contactor chatter during passing clouds using a fully configurable mathematical guard band.
-* **Efficiency Boost Engine:** Detects massive absolute grid draw (e.g., heat pumps, cooktops, or pure night conditions) and automatically switches the charger to 11 kW (16 A) after 5 minutes to minimize EV charging overhead and vehicle vampire drain.
-* **Pre-Conditioning Recovery:** Automatically forces maximum capability (16 A) when the vehicle transitions to `Charge Finished` or `Connected (Waiting)`, ensuring morning cabin pre-heating runs 100% off the grid without draining the car battery.
-* **Unyielding Physics Core:** Calculates actual household potential based on live, physisch gemessener Wallbox-Leistung (`Nrg[11]`) instead of theoretical estimations, eliminating data corruption during balancing frames.
-* **Thread-Safe Memory Pool:** Implements high-speed asynchronous synchronization using Go's `sync.RWMutex` to isolate background network telemetry from the frontend HTTP Layout Engine.
-* **Unified Web UI & Remote API:** Provides a clean browser card layout and a stateless POST API wrapper for scriptable remote control (e.g., Home Assistant, Cron jobs).
+* **Solar hysteresis:** Adjusts charging current in one-amp increments or larger, with a configurable wattage deadband to reduce changes during fluctuating solar production.
+* **Zero-solar boost:** While the car is charging, exactly zero reported solar production starts a delay timer. Once the delay expires, the target becomes the configured maximum current. This rule does not use the configured `GridThresholdW` value or measured grid import.
+* **Solar recovery:** From maximum current, sufficient net solar potential sustained for the configured delay returns the target to minimum current; ordinary solar hysteresis then adjusts it as conditions change.
+* **Measured load estimate:** Estimates non-wallbox house load by subtracting measured wallbox power (`Nrg[11]`) from the Prometheus house-consumption metric, then subtracts that estimate from solar production.
+* **Thread-safe status snapshot:** Uses a `sync.RWMutex` to protect wallbox status shared by the polling loop, control loop, and web server.
+* **Web UI and mode endpoint:** Provides a browser dashboard and a `POST /setmode` endpoint for switching between solar and maximum-current modes.
 
 ---
 
 ## 📐 Algorithmic Core Math
 
 ### 1. Symmetrical Hysteresis Loop
-The tracking engine calculates the true house net load and available solar potential dynamically every second:
+The control loop recalculates its target every two seconds by default. It assumes the Prometheus house-consumption metric includes the wallbox:
 
 \[\text{CalculatedHouseLoadWatts} = \text{TotalHouseConsumption (Prometheus)} - \text{RealWbPowerMeasured (Wallbox)}\]
 \[\text{PotentialSolarTotal} = \text{LiveSolarProductionW} - \text{CalculatedHouseLoadWatts}\]
 
-To step up or down during active charging (`Car State: 2`), the algorithm evaluates capacity against the centralized threshold:
+`CalculatedWbPower` is an estimate from configured amperage, active phases, and nominal voltage. The house-load calculation instead uses the measured wallbox power from `Nrg[11]`. Grid-meter surplus is reported separately; the control thresholds use `PotentialSolarTotal`.
+
+During active charging (`Car State: 2`), the algorithm derives candidate amperage steps from net solar potential and the hysteresis band:
 
 * **Step Up Criterion:** 
   \[\text{TargetAmps} = \text{int}\left(\frac{\text{PotentialSolarTotal} - \text{SolarHysteresisBandW}}{\text{WattPerAmpStep}}\right)\]
@@ -33,45 +35,47 @@ To step up or down during active charging (`Car State: 2`), the algorithm evalua
 * **Step Down Criterion:** 
   \[\text{TargetAmps} = \text{int}\left(\frac{\text{PotentialSolarTotal} + \text{SolarHysteresisBandW}}{\text{WattPerAmpStep}}\right)\]
 
-If the vehicle is not actively charging (`Car State != 2`), bounds and deltas evaluate logically to `N/A` or `0` to secure absolute backend data integrity.
+The step-up candidate is applied only when it exceeds the current setting; the step-down candidate is applied only when it is below the current setting. Targets are clamped to the configured minimum and maximum, and a single calculation can change multiple amps. Outside the deadband, the controller does not adjust current using this solar rule unless the car is actively charging.
 
-### 2. Guard Logic and State Machine
+### 2. Control Priority and State Machine
 
 ```text
-       [ Vehicle State Check ]
-            /         \
-     [Car: 1/3/4]    [Car: 2 (Charging)]
-
-          |                   |
-   [Set Boundaries]    [Deficit Audit] ----> Total Grid Draw > 1500W?
-
-          |                   |                             | (Sustained 5m)
-  (Unplugged -> 6A)    [Solar Tracking]             [EFFICIENCY BOOST]
-  (Finished  -> 16A)          |                             |
-                       (Normal Hysteresis)           (Lock to 16A / 11kW)
+1. Max mode: target the configured maximum current.
+2. If car-connected-only policy is enabled (default): unplugged -> minimum;
+  waiting/finished -> hold current, or maximum if that option is enabled.
+3. While charging: exactly 0 W solar sustained for GridThresholdDelaySec -> maximum.
+  From maximum, enough net solar sustained for the same delay -> minimum.
+4. Otherwise, apply ordinary solar hysteresis while charging.
 ```
+
+The boost condition is `LiveSolarProductionW == 0`; `GridThresholdW` is not used by the control function, despite its name and the dashboard label. Waiting/finished states are set to maximum only when `SetMaxAmperageWhenConnectedAndNotCharging` is enabled (it is disabled by default). Ordinary hysteresis writes are subject to the write cooldown, except when the car state changes. Max-mode and connection-policy branches return before that cooldown check.
 
 ---
 
 ## 🛠️ Configuration Parameter Reference
 
-All operational thresholds are managed inside `variables/variables.go` using pure configuration parameters:
+The main control values are defined in `src/variables/variables.go`:
 
 ```go
 NominalVoltage               = 230.0 // Local grid phase voltage baseline
 MinAmperage                  = 6     // Floor limit (approx 4.1 kW on 3-Phase)
 MaxAmperage                  = 16    // Ceiling limit (approx 11.0 kW on 3-Phase)
-WallboxWriteCooldownSec      = 60    // Minimum transmission window to protect EEPROM
-GridThresholdW               = 1500  // Deficit ceiling before forcing 11 kW boost
-GridThresholdDelaySec        = 300   // Time delay window (5 mins) to filter short spikes
-SolarHysteresisBandW         = 400   // Symmetrical buffer zone to stabilize stepping
+CalculationIntervalMs       = 2000  // Control-loop interval (2 seconds)
+WallboxWriteCooldownSec     = 60    // Cooldown for ordinary hysteresis writes
+GridThresholdW              = 1500  // Currently not used by the control function
+GridThresholdDelaySec       = 300   // Delay for zero-solar boost and solar recovery
+SolarHysteresisBandW        = 400   // Deadband for solar current adjustments
+SetWallboxOnlyIfCarConnected = true // Apply connection-state overrides
+SetMaxAmperageWhenConnectedAndNotCharging = false // Optional max while waiting/finished
 ```
+
+Maximum current is a current limit, not a fixed power level: at 16 A, 230 V, and three phases, the estimate is about 11.0 kW; actual power depends on active phases and vehicle limits. `GridThresholdW` is currently displayed by the web dashboard but does not affect the control logic.
 
 ---
 
 ## 🖥️ Terminal Interface Telemetry
 
-The application streams highly structured, tag- and nachtsichere runtime execution logs down to the standard OS console output:
+The application prints a control summary to standard output on each control-loop iteration. `PotentialSolarTotal` is solar production minus estimated non-wallbox house load; `GridSurplus` comes from the grid-power metric.
 
 ```text
 [2026-10-04 10:28:56] [PV-Control] Curr:16 A (11040W) | PV-Gen:2745W | GridSurplus:328W | PotentialSolarTotal:315W | Target:16 A | Car:Finished | Mode:SOLAR | Session:31.65 kWh | Psm:Automatic | Relay:3-Phase | UpIn:MaxReached | DownIn:-10325W (Need:10640W) | Timers:Idle
@@ -81,24 +85,26 @@ The application streams highly structured, tag- and nachtsichere runtime executi
 
 ## 🌐 Remote API Endpoint Schema
 
-The internal web framework blocks standard browser header `GET` commands inside action routing scopes to ensure operational safety. State parameters must be passed using an explicit **`POST` HTTP Method**:
+The web UI exposes one mode-switch endpoint. It accepts `POST` requests with a `mode` query parameter and redirects to the dashboard afterward:
 
-### Force Maximum Output Mode (11 kW / 16 A)
+### Force Maximum Current
 ```bash
 curl -X POST "http://<CONTROLLER_IP>:8084/setmode?mode=max"
 ```
 
-### Re-Enable Automatic Solar Tracking Loop
+### Re-enable Solar Tracking
 ```bash
 curl -X POST "http://<CONTROLLER_IP>:8084/setmode?mode=solar"
 ```
+
+Maximum mode immediately requests the configured maximum amperage. Switching back to solar mode calculates and writes a current target before the regular control loop continues.
 
 ---
 
 ## ⚙️ Compiling and Native Execution
 
-1. Ensure a working installation of Go (`>= 1.27.1`) is present on your host machine.
-2. Open your terminal shell inside the `src/` directory framework layout and execute the native daemon:
+1. Install Go 1.27.4, as specified by `src/go.mod` and the container build.
+2. From the `src/` directory, run the daemon:
 
 ```bash
 go run .
@@ -117,14 +123,14 @@ go build -ldflags="-s -w" -o wallbox-controller .
 Since Podman runs inherently rootless and daemonless, it is the ideal target engine for secure smart home infrastructure. The application can be compiled, isolated, and persisted entirely within unprivileged user spaces.
 
 ### Method A: Orchestration via Podman Compose (Recommended)
-This approach automatically provisions persistent volume layout mapping (`log/`) with correct SELinux/AppArmor security contexts (`:Z`), applies timezone synchronization, and configures automated log rotation boundaries.
+This uses the repository's `compose.yaml`, which publishes port 8084, mounts a host directory at `/app/log`, sets the timezone, and configures container log rotation. Update the Prometheus URL in that file to an address reachable from the container.
 
 ```bash
 # Initialize, compile, and launch the complete stack in detached background mode
-podman-compose up -d --build --force-recreate ; podman image prune -f
+podman compose up -d --build --force-recreate
 
 # Recompile the source code and apply internal changes seamlessly on the fly to specific container
-podman-compose build wallbox-controller && podman-compose up -d
+podman compose build wallbox-controller && podman compose up -d
 ```
 
 ### Method B: Manual Standalone Container CLI
@@ -144,7 +150,7 @@ podman run -d \
   --name wallbox-controller \
   --net=host \
   -v ./data/log:/app/log:Z \
-  --userns_mode=keep-id \
+  --userns=keep-id \
   --log-driver=k8s-file \
   --log-opt max-size=10mb \
   --log-opt max-file=3 \
@@ -183,14 +189,16 @@ systemctl --user enable --now container-wallbox-controller.service
 
 ### Configuration Environment Variables
 
+String environment overrides are supported for `WALLBOX_IP`, `PROMETHEUS_METRICS_URL_INVERTER`, and `WRITE_LOG_FILE_PATH`. The current generic environment helper does not parse numeric or boolean values: setting the other environment variables in this table can cause the application to panic. Change those values in `src/variables/variables.go` until typed parsing is implemented.
+
 | Environment Variable | Description | Expected Type | Default Value |
 | :--- | :--- | :--- | :--- |
 | **`WALLBOX_IP`** | Static network destination IP address of your physical go-eCharger hardware. | String | `192.168.30.40` |
 | **`PROMETHEUS_METRICS_URL_INVERTER`** | Endpoint URL where the inverter's Prometheus telemetry metrics are scraped. | String | `http://127.0.0.1:2112/metrics` |
 | **`WEB_SERVER_PORT`** | Active network port binding configuration for the internal web engine framework. | Integer | `8084` |
-| **`WEB_SERVER_IPV4_ONLY`** | Binds the built-in HTTP server listening layer strictly to the IPv4 loopback socket stack. | Boolean | `true` |
+| **`WEB_SERVER_IPV4_ONLY`** | With `true`, listens on `0.0.0.0`; with `false`, listens on the unspecified address. | Boolean | `true` |
 | **`WEB_SERVER_AUTO_RELOAD_INTERVAL_SEC`** | Controls how frequently the browser frontend card layout refreshes its status metrics. | Integer | `10` |
-| **`MIN_AMPERE`** | Absolute lower current control constraint boundary for vehicle power delivery. | Integer | `6` |
-| **`MAX_AMPERE`** | Absolute ceiling current control constraint boundary (e.g., 16 for 11kW, 32 for 22kW). | Integer | `16` |
+| **`MIN_AMPERE`** | Minimum amperage target. | Integer | `6` |
+| **`MAX_AMPERE`** | Maximum amperage target (16 A is about 11 kW at three phases and 230 V). | Integer | `16` |
 | **`WRITE_LOG_ENABLED`** | Toggles whether API execution parameters are tracked locally on the host storage disk. | Boolean | `true` |
 | **`WRITE_LOG_FILE_PATH`** | Destination filesystem pathway map for saving the physical engine transition records. | String | `log/wallbox_writes.log` |
